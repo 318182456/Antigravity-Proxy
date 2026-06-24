@@ -17,7 +17,7 @@ import {
   onRestoreStockDone,
 } from "./proxyManager";
 import { log, logSuccess, logError } from "./logger";
-import { onQuotaChanged, updateQuota, triggerTrueQuotaSync } from "./statusIndicator";
+import { onQuotaChanged, updateQuota, triggerTrueQuotaSync, getQuota } from "./statusIndicator";
 
 let panel: vscode.WebviewPanel | undefined;
 
@@ -191,6 +191,11 @@ export function openConfigWebview(context: vscode.ExtensionContext): void {
             success: true,
             message: '✅ 模型通道配额已成功从官方语言服务器同步（状态栏数据已同步）'
           });
+          break;
+        }
+        case "requestQuotaState": {
+          const state = getQuota();
+          panel?.webview.postMessage({ command: "quotaState", state });
           break;
         }
       }
@@ -1197,6 +1202,9 @@ function getWebviewContent(config: ProxyConfig): string {
         
         // 启动定时器，每 10 秒动态刷新一次倒计时，确保页面显示的刷新时间完全实时准确
         setInterval(refreshQuotaDisplay, 10000);
+        
+        // 页面加载完成后立即向后台请求最新的模型配额状态数据，防止初始化通道竞争导致首包丢失
+        vscode.postMessage({ command: 'requestQuotaState' });
     </script>
 </body>
 </html>`;
