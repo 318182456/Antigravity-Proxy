@@ -954,13 +954,13 @@ function getWebviewContent(config: ProxyConfig): string {
                 
                 if (card.value === 100) {
                     if (desc) desc.textContent = '额度充沛，处于就绪状态';
-                    if (wrapper) wrapper.setAttribute('data-tooltip', '已使用 0% | 剩余 100%\n无需刷新');
+                    if (wrapper) wrapper.setAttribute('data-tooltip', '已使用 0% | 剩余 100%\\n无需刷新');
                 } else {
                     const timeStr = formatRemainingTime(card.resetTime, card.type);
                     const label = timeStr === '即将刷新' ? '即将刷新' : '将在 ' + timeStr + ' 后完全刷新';
                     if (desc) desc.textContent = label;
                     if (wrapper) {
-                        wrapper.setAttribute('data-tooltip', '已使用 ' + (100 - card.value) + '% | 剩余 ' + card.value + '%\n' + (timeStr === '即将刷新' ? '即将刷新' : '将在 ' + timeStr + ' 后刷新'));
+                        wrapper.setAttribute('data-tooltip', '已使用 ' + (100 - card.value) + '% | 剩余 ' + card.value + '%\\n' + (timeStr === '即将刷新' ? '即将刷新' : '将在 ' + timeStr + ' 后刷新'));
                     }
                 }
             });
