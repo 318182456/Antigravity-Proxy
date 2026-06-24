@@ -2,7 +2,7 @@
   "name": "antigravity-proxy",
   "displayName": "Antigravity Proxy",
   "description": "Windows 透明代理注入工具 — 为 Antigravity 助手提供全流程自动化代理方案（内置中继、hosts 劫持、状态监控）。",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "318182456",
   "author": "318182456",
   "repository": {
