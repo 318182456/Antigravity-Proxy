@@ -903,22 +903,62 @@ function getWebviewContent(config: ProxyConfig): string {
             }, 800);
         }
 
-        function updateQuotaValue(idPrefix, value, tooltipText) {
-            const wrapper = document.getElementById(idPrefix + '-wrapper');
-            const circle = document.getElementById(idPrefix + '-circle');
-            const text = document.getElementById(idPrefix + '-text');
-            const desc = document.getElementById(idPrefix + '-desc');
+        let lastQuotaState = null;
+
+        function formatRemainingTime(resetTimeStr, type) {
+            if (!resetTimeStr) return '';
+            const diffMs = new Date(resetTimeStr).getTime() - Date.now();
+            if (diffMs <= 0) return '即将刷新';
             
-            if (wrapper) wrapper.setAttribute('data-tooltip', tooltipText);
-            if (text) text.textContent = value + '%';
-            if (circle) circle.style.strokeDasharray = value + ', 100';
+            const diffSecs = Math.floor(diffMs / 1000);
+            const diffMins = Math.floor(diffSecs / 60);
+            const diffHours = Math.floor(diffMins / 60);
+            const diffDays = Math.floor(diffHours / 24);
             
-            // 可选：如果完全刷新，更新描述文本以实现真实变化效果
-            if (desc) {
-                if (value === 100) {
-                    desc.textContent = '额度充沛，处于就绪状态';
+            if (type === 'weekly') {
+                const hoursPart = diffHours % 24;
+                return diffDays + " 天 " + hoursPart + " 小时";
+            } else {
+                if (diffHours > 0) {
+                    const minsPart = diffMins % 60;
+                    return diffHours + " 小时 " + minsPart + " 分钟";
+                } else {
+                    return diffMins + " 分钟";
                 }
             }
+        }
+
+        function refreshQuotaDisplay() {
+            if (!lastQuotaState) return;
+            
+            const cards = [
+                { id: 'gemini-weekly', value: lastQuotaState.geminiWeekly, resetTime: lastQuotaState.geminiWeeklyResetTime, type: 'weekly' },
+                { id: 'gemini-fivehour', value: lastQuotaState.geminiFiveHour, resetTime: lastQuotaState.geminiFiveHourResetTime, type: 'fivehour' },
+                { id: 'claude-weekly', value: lastQuotaState.claudeWeekly, resetTime: lastQuotaState.claudeWeeklyResetTime, type: 'weekly' },
+                { id: 'claude-fivehour', value: lastQuotaState.claudeFiveHour, resetTime: lastQuotaState.claudeFiveHourResetTime, type: 'fivehour' }
+            ];
+            
+            cards.forEach(card => {
+                const circle = document.getElementById(card.id + '-circle');
+                const text = document.getElementById(card.id + '-text');
+                const desc = document.getElementById(card.id + '-desc');
+                const wrapper = document.getElementById(card.id + '-wrapper');
+                
+                if (text) text.textContent = card.value + '%';
+                if (circle) circle.style.strokeDasharray = card.value + ', 100';
+                
+                if (card.value === 100) {
+                    if (desc) desc.textContent = '额度充沛，处于就绪状态';
+                    if (wrapper) wrapper.setAttribute('data-tooltip', '已使用 0% | 剩余 100%\n无需刷新');
+                } else {
+                    const timeStr = formatRemainingTime(card.resetTime, card.type);
+                    const label = timeStr === '即将刷新' ? '即将刷新' : '将在 ' + timeStr + ' 后完全刷新';
+                    if (desc) desc.textContent = label;
+                    if (wrapper) {
+                        wrapper.setAttribute('data-tooltip', '已使用 ' + (100 - card.value) + '% | 剩余 ' + card.value + '%\n' + (timeStr === '即将刷新' ? '即将刷新' : '将在 ' + timeStr + ' 后刷新'));
+                    }
+                }
+            });
         }
 
         function getFormValues() {
@@ -1148,14 +1188,15 @@ function getWebviewContent(config: ProxyConfig): string {
                     if (badge && state.credits !== undefined) {
                         badge.textContent = 'Credits: ' + state.credits;
                     }
-                    updateQuotaValue('gemini-weekly', state.geminiWeekly, '已使用 ' + (100 - state.geminiWeekly) + '% | 剩余 ' + state.geminiWeekly + '%\\n将在 3 天 7 小时后完全刷新');
-                    updateQuotaValue('gemini-fivehour', state.geminiFiveHour, '已使用 ' + (100 - state.geminiFiveHour) + '% | 剩余 ' + state.geminiFiveHour + '%\\n将在 2 小时 23 分钟后完全刷新');
-                    updateQuotaValue('claude-weekly', state.claudeWeekly, '已使用 ' + (100 - state.claudeWeekly) + '% | 剩余 ' + state.claudeWeekly + '%\\n将在 5 天 23 小时后完全刷新');
-                    updateQuotaValue('claude-fivehour', state.claudeFiveHour, '已使用 ' + (100 - state.claudeFiveHour) + '% | 剩余 ' + state.claudeFiveHour + '%\\n无需刷新');
+                    lastQuotaState = state;
+                    refreshQuotaDisplay();
                     break;
                 }
             }
         });
+        
+        // 启动定时器，每 10 秒动态刷新一次倒计时，确保页面显示的刷新时间完全实时准确
+        setInterval(refreshQuotaDisplay, 10000);
     </script>
 </body>
 </html>`;

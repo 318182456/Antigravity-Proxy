@@ -169,12 +169,14 @@ export async function fetchTrueQuota(): Promise<Partial<QuotaState> | null> {
                             (m.label?.toLowerCase().includes('flash') || m.displayName?.toLowerCase().includes('flash')) && m.quotaInfo
                         );
                         const geminiFiveHour = geminiConfig ? Math.round(geminiConfig.quotaInfo.remainingFraction * 100) : 42;
+                        const geminiFiveHourResetTime = geminiConfig?.quotaInfo?.resetTime;
                         
                         // 匹配 Claude 5 小时限额
                         const claudeConfig = clientModelConfigs.find((m: any) => 
                             (m.label?.toLowerCase().includes('claude') || m.displayName?.toLowerCase().includes('claude')) && m.quotaInfo
                         );
                         const claudeFiveHour = claudeConfig ? Math.round(claudeConfig.quotaInfo.remainingFraction * 100) : 100;
+                        const claudeFiveHourResetTime = claudeConfig?.quotaInfo?.resetTime;
                         
                         log(`[💡 真数据同步] 成功拉取官方实时额度 (端口: ${port}) -> Credits: ${creditsStr}, Gemini Weekly: ${geminiWeekly}%, Gemini 5-Hour: ${geminiFiveHour}%, Claude Weekly: ${claudeWeekly}%, Claude 5-Hour: ${claudeFiveHour}%`);
                         
@@ -183,7 +185,9 @@ export async function fetchTrueQuota(): Promise<Partial<QuotaState> | null> {
                             geminiWeekly,
                             geminiFiveHour,
                             claudeWeekly,
-                            claudeFiveHour
+                            claudeFiveHour,
+                            geminiFiveHourResetTime,
+                            claudeFiveHourResetTime
                         };
                     }
                 } catch (e) {

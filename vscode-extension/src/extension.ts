@@ -63,7 +63,7 @@ export function activate(context: vscode.ExtensionContext) {
     initGlobalState(context.globalState);
     log('Antigravity Proxy 扩展已激活');
 
-    context.subscriptions.push(createRuntimeIndicator());
+    context.subscriptions.push(createRuntimeIndicator(context));
 
     const config = getConfig();
 

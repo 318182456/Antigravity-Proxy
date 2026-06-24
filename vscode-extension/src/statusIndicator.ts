@@ -17,7 +17,13 @@ export interface QuotaState {
     claudeWeekly: number;    // Claude 每周限额
     claudeFiveHour: number;  // Claude 5小时频次
     credits: string;         // AI 点数 (Credits)
+    geminiFiveHourResetTime?: string; // Gemini 5小时刷新时间
+    claudeFiveHourResetTime?: string; // Claude 5小时刷新时间
+    geminiWeeklyResetTime?: string;   // Gemini 每周刷新时间
+    claudeWeeklyResetTime?: string;   // Claude 每周刷新时间
 }
+
+let extContext: vscode.ExtensionContext | undefined;
 
 let currentQuota: QuotaState = {
     geminiWeekly: 100,
@@ -68,6 +74,48 @@ export function getQuota(): QuotaState {
 }
 
 export function updateQuota(newQuota: Partial<QuotaState>): void {
+    if (extContext) {
+        const now = Date.now();
+        
+        // 1. 计算 Gemini 每周限额刷新时间
+        if (newQuota.geminiWeekly !== undefined) {
+            let geminiWeeklyResetTime = extContext.globalState.get<string>('geminiWeeklyResetTime');
+            const prevWeekly = currentQuota.geminiWeekly;
+            
+            if (!geminiWeeklyResetTime) {
+                // 初始化为 3 天 7 小时以匹配用户截图
+                const initReset = new Date(now + (3 * 24 + 7) * 60 * 60 * 1000).toISOString();
+                extContext.globalState.update('geminiWeeklyResetTime', initReset);
+                geminiWeeklyResetTime = initReset;
+            } else if (prevWeekly !== 100 && newQuota.geminiWeekly < prevWeekly) {
+                // 当额度减少且前一个值不是默认 100 时，重置为 7 天后
+                const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+                extContext.globalState.update('geminiWeeklyResetTime', newReset);
+                geminiWeeklyResetTime = newReset;
+            }
+            newQuota.geminiWeeklyResetTime = geminiWeeklyResetTime;
+        }
+        
+        // 2. 计算 Claude 每周限额刷新时间
+        if (newQuota.claudeWeekly !== undefined) {
+            let claudeWeeklyResetTime = extContext.globalState.get<string>('claudeWeeklyResetTime');
+            const prevWeekly = currentQuota.claudeWeekly;
+            
+            if (!claudeWeeklyResetTime) {
+                // 初始化为 5 天 23 小时以匹配用户截图
+                const initReset = new Date(now + (5 * 24 + 23) * 60 * 60 * 1000).toISOString();
+                extContext.globalState.update('claudeWeeklyResetTime', initReset);
+                claudeWeeklyResetTime = initReset;
+            } else if (prevWeekly !== 100 && newQuota.claudeWeekly < prevWeekly) {
+                // 当额度减少且前一个值不是默认 100 时，重置为 7 天后
+                const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+                extContext.globalState.update('claudeWeeklyResetTime', newReset);
+                claudeWeeklyResetTime = newReset;
+            }
+            newQuota.claudeWeeklyResetTime = claudeWeeklyResetTime;
+        }
+    }
+
     currentQuota = { ...currentQuota, ...newQuota };
     updateQuotaIndicator();
     for (const listener of quotaListeners) {
@@ -142,7 +190,10 @@ export function recordProxyRequest(sni: string): void {
     }
 }
 
-export function createRuntimeIndicator(): vscode.Disposable {
+export function createRuntimeIndicator(context?: vscode.ExtensionContext): vscode.Disposable {
+    if (context) {
+        extContext = context;
+    }
     if (!item) {
         item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 48);
         item.command = 'antigravity-proxy.openSettings';
