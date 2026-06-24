@@ -81,66 +81,80 @@ export function updateQuota(newQuota: Partial<QuotaState>): void {
     if (extContext) {
         const now = Date.now();
         
-        // 1. 计算 Gemini 每周限额刷新时间
+        // 1. 处理 Gemini 每周限额刷新时间
         if (newQuota.geminiWeekly !== undefined) {
-            let geminiWeeklyResetTime = extContext.globalState.get<string>('geminiWeeklyResetTime');
-            const prevWeekly = currentQuota.geminiWeekly;
-            
-            // 进行一次性纠偏：由于之前的顺延漏洞导致多出了一小时，如果检测到尚未进行过此纠偏，将其调准（扣减 1 小时）
-            const geminiAdjusted = extContext.globalState.get<boolean>('geminiWeeklyAdjustedV2');
-            if (geminiWeeklyResetTime && !geminiAdjusted) {
-                const correctedTime = new Date(new Date(geminiWeeklyResetTime).getTime() - 60 * 60 * 1000).toISOString();
-                extContext.globalState.update('geminiWeeklyResetTime', correctedTime);
-                extContext.globalState.update('geminiWeeklyAdjustedV2', true);
-                geminiWeeklyResetTime = correctedTime;
-            }
-            
-            if (!geminiWeeklyResetTime) {
-                // 初始化为 3 天 6 小时以匹配官方最新校准值
-                const initReset = new Date(now + (3 * 24 + 6) * 60 * 60 * 1000).toISOString();
-                extContext.globalState.update('geminiWeeklyResetTime', initReset);
-                geminiWeeklyResetTime = initReset;
+            let geminiWeeklyResetTime = newQuota.geminiWeeklyResetTime;
+            if (geminiWeeklyResetTime) {
+                // 官方直接返回了真实的周刷新时间，直接使用并持久化到本地 globalState
+                extContext.globalState.update('geminiWeeklyResetTime', geminiWeeklyResetTime);
             } else {
-                // 完美的周期性固定重置逻辑：只有当前时间已经越过了上一次的重置时间（重置已发生），且额度在新周期内发生消耗，才重置到 7 天后
-                const hasExpired = now > new Date(geminiWeeklyResetTime).getTime();
-                if (hasExpired && prevWeekly !== 100 && newQuota.geminiWeekly < prevWeekly) {
-                    const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
-                    extContext.globalState.update('geminiWeeklyResetTime', newReset);
-                    geminiWeeklyResetTime = newReset;
+                // 优雅降级：官方未返回，走高精度本地推算与纠偏逻辑
+                geminiWeeklyResetTime = extContext.globalState.get<string>('geminiWeeklyResetTime');
+                const prevWeekly = currentQuota.geminiWeekly;
+                
+                // 进行一次性纠偏：由于之前的顺延漏洞导致多出了一小时，如果检测到尚未进行过此纠偏，将其调准（扣减 1 小时）
+                const geminiAdjusted = extContext.globalState.get<boolean>('geminiWeeklyAdjustedV2');
+                if (geminiWeeklyResetTime && !geminiAdjusted) {
+                    const correctedTime = new Date(new Date(geminiWeeklyResetTime).getTime() - 60 * 60 * 1000).toISOString();
+                    extContext.globalState.update('geminiWeeklyResetTime', correctedTime);
+                    extContext.globalState.update('geminiWeeklyAdjustedV2', true);
+                    geminiWeeklyResetTime = correctedTime;
                 }
+                
+                if (!geminiWeeklyResetTime) {
+                    // 初始化为 3 天 6 小时以匹配官方最新校准值
+                    const initReset = new Date(now + (3 * 24 + 6) * 60 * 60 * 1000).toISOString();
+                    extContext.globalState.update('geminiWeeklyResetTime', initReset);
+                    geminiWeeklyResetTime = initReset;
+                } else {
+                    // 完美的周期性固定重置逻辑：只有当前时间已经越过了上一次的重置时间（重置已发生），且额度在新周期内发生消耗，才重置到 7 天后
+                    const hasExpired = now > new Date(geminiWeeklyResetTime).getTime();
+                    if (hasExpired && prevWeekly !== 100 && newQuota.geminiWeekly < prevWeekly) {
+                        const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+                        extContext.globalState.update('geminiWeeklyResetTime', newReset);
+                        geminiWeeklyResetTime = newReset;
+                    }
+                }
+                newQuota.geminiWeeklyResetTime = geminiWeeklyResetTime;
             }
-            newQuota.geminiWeeklyResetTime = geminiWeeklyResetTime;
         }
         
-        // 2. 计算 Claude 每周限额刷新时间
+        // 2. 处理 Claude 每周限额刷新时间
         if (newQuota.claudeWeekly !== undefined) {
-            let claudeWeeklyResetTime = extContext.globalState.get<string>('claudeWeeklyResetTime');
-            const prevWeekly = currentQuota.claudeWeekly;
-            
-            // 进行一次性纠偏：由于之前的顺延漏洞导致可能也有偏差，我们同样将其优化
-            const claudeAdjusted = extContext.globalState.get<boolean>('claudeWeeklyAdjustedV2');
-            if (claudeWeeklyResetTime && !claudeAdjusted) {
-                const correctedTime = new Date(new Date(claudeWeeklyResetTime).getTime() - 60 * 60 * 1000).toISOString();
-                extContext.globalState.update('claudeWeeklyResetTime', correctedTime);
-                extContext.globalState.update('claudeWeeklyAdjustedV2', true);
-                claudeWeeklyResetTime = correctedTime;
-            }
-            
-            if (!claudeWeeklyResetTime) {
-                // 初始化为 5 天 21 小时以匹配官方最新校准值
-                const initReset = new Date(now + (5 * 24 + 21) * 60 * 60 * 1000).toISOString();
-                extContext.globalState.update('claudeWeeklyResetTime', initReset);
-                claudeWeeklyResetTime = initReset;
+            let claudeWeeklyResetTime = newQuota.claudeWeeklyResetTime;
+            if (claudeWeeklyResetTime) {
+                // 官方直接返回了真实的周刷新时间，直接使用并持久化到本地 globalState
+                extContext.globalState.update('claudeWeeklyResetTime', claudeWeeklyResetTime);
             } else {
-                // 完美的周期性固定重置逻辑：只有当前时间已经越过了上一次的重置时间（重置已发生），且额度在新周期内发生消耗，才重置到 7 天后
-                const hasExpired = now > new Date(claudeWeeklyResetTime).getTime();
-                if (hasExpired && prevWeekly !== 100 && newQuota.claudeWeekly < prevWeekly) {
-                    const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
-                    extContext.globalState.update('claudeWeeklyResetTime', newReset);
-                    claudeWeeklyResetTime = newReset;
+                // 优雅降级：官方未返回，走高精度本地推算与纠偏逻辑
+                claudeWeeklyResetTime = extContext.globalState.get<string>('claudeWeeklyResetTime');
+                const prevWeekly = currentQuota.claudeWeekly;
+                
+                // 进行一次性纠偏：由于之前的顺延漏洞导致可能也有偏差，我们同样将其优化
+                const claudeAdjusted = extContext.globalState.get<boolean>('claudeWeeklyAdjustedV2');
+                if (claudeWeeklyResetTime && !claudeAdjusted) {
+                    const correctedTime = new Date(new Date(claudeWeeklyResetTime).getTime() - 60 * 60 * 1000).toISOString();
+                    extContext.globalState.update('claudeWeeklyResetTime', correctedTime);
+                    extContext.globalState.update('claudeWeeklyAdjustedV2', true);
+                    claudeWeeklyResetTime = correctedTime;
                 }
+                
+                if (!claudeWeeklyResetTime) {
+                    // 初始化为 5 天 21 小时以匹配官方最新校准值
+                    const initReset = new Date(now + (5 * 24 + 21) * 60 * 60 * 1000).toISOString();
+                    extContext.globalState.update('claudeWeeklyResetTime', initReset);
+                    claudeWeeklyResetTime = initReset;
+                } else {
+                    // 完美的周期性固定重置逻辑：只有当前时间已经越过了上一次的重置时间（重置已发生），且额度在新周期内发生消耗，才重置到 7 天后
+                    const hasExpired = now > new Date(claudeWeeklyResetTime).getTime();
+                    if (hasExpired && prevWeekly !== 100 && newQuota.claudeWeekly < prevWeekly) {
+                        const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+                        extContext.globalState.update('claudeWeeklyResetTime', newReset);
+                        claudeWeeklyResetTime = newReset;
+                    }
+                }
+                newQuota.claudeWeeklyResetTime = claudeWeeklyResetTime;
             }
-            newQuota.claudeWeeklyResetTime = claudeWeeklyResetTime;
         }
     }
 
