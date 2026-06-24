@@ -125,6 +125,45 @@ export function updateQuota(newQuota: Partial<QuotaState>): void {
     }
 }
 
+function formatRemainingTime(resetTimeStr: string | undefined, type: 'weekly' | 'fivehour'): string {
+    if (!resetTimeStr) {
+        return '';
+    }
+    const diffMs = new Date(resetTimeStr).getTime() - Date.now();
+    if (diffMs <= 0) {
+        return '即将刷新';
+    }
+    
+    const diffSecs = Math.floor(diffMs / 1000);
+    const diffMins = Math.floor(diffSecs / 60);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (type === 'weekly') {
+        const hoursPart = diffHours % 24;
+        return `${diffDays} 天 ${hoursPart} 小时`;
+    } else {
+        if (diffHours > 0) {
+            const minsPart = diffMins % 60;
+            return `${diffHours} 小时 ${minsPart} 分钟`;
+        } else {
+            return `${diffMins} 分钟`;
+        }
+    }
+}
+
+function getQuotaTooltipLabel(value: number, resetTimeStr: string | undefined, type: 'weekly' | 'fivehour'): string {
+    if (value === 100) {
+        return '100% (额度充沛，处于就绪状态)';
+    }
+    const timeStr = formatRemainingTime(resetTimeStr, type);
+    if (!timeStr) {
+        return `${value}%`;
+    }
+    const suffix = timeStr === '即将刷新' ? '即将刷新' : `将在 ${timeStr} 后完全刷新`;
+    return `${value}% (${suffix})`;
+}
+
 export function updateQuotaIndicator(): void {
     if (!quotaItem) {
         return;
@@ -140,10 +179,10 @@ export function updateQuotaIndicator(): void {
     quotaItem.tooltip = [
         '模型剩余配额与点数 (Antigravity)',
         `- AI点数 (Credits): ${currentQuota.credits}`,
-        `- Gemini 每周限额: ${currentQuota.geminiWeekly}%`,
-        `- Gemini 5小时频次: ${currentQuota.geminiFiveHour}%`,
-        `- Claude 每周限额: ${currentQuota.claudeWeekly}%`,
-        `- Claude 5小时频次: ${currentQuota.claudeFiveHour}%`,
+        `- Gemini 每周限额: ${getQuotaTooltipLabel(currentQuota.geminiWeekly, currentQuota.geminiWeeklyResetTime, 'weekly')}`,
+        `- Gemini 5小时频次: ${getQuotaTooltipLabel(currentQuota.geminiFiveHour, currentQuota.geminiFiveHourResetTime, 'fivehour')}`,
+        `- Claude 每周限额: ${getQuotaTooltipLabel(currentQuota.claudeWeekly, currentQuota.claudeWeeklyResetTime, 'weekly')}`,
+        `- Claude 5小时频次: ${getQuotaTooltipLabel(currentQuota.claudeFiveHour, currentQuota.claudeFiveHourResetTime, 'fivehour')}`,
         '',
         '点击打开代理配置页面'
     ].join('\n');
@@ -190,6 +229,8 @@ export function recordProxyRequest(sni: string): void {
     }
 }
 
+let tooltipTimer: NodeJS.Timeout | undefined;
+
 export function createRuntimeIndicator(context?: vscode.ExtensionContext): vscode.Disposable {
     if (context) {
         extContext = context;
@@ -214,10 +255,21 @@ export function createRuntimeIndicator(context?: vscode.ExtensionContext): vscod
         }, 30000);
     }
     
+    // 启动状态栏 Tooltip 每 10 秒定时刷新，保证倒计时显示完全实时准确
+    if (!tooltipTimer) {
+        tooltipTimer = setInterval(() => {
+            updateQuotaIndicator();
+        }, 10000);
+    }
+    
     return new vscode.Disposable(() => {
         if (trueQuotaTimer) {
             clearInterval(trueQuotaTimer);
             trueQuotaTimer = undefined;
+        }
+        if (tooltipTimer) {
+            clearInterval(tooltipTimer);
+            tooltipTimer = undefined;
         }
         item?.dispose();
         item = undefined;
