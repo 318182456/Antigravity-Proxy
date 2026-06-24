@@ -2,7 +2,7 @@
   "name": "antigravity-proxy",
   "displayName": "Antigravity Proxy",
   "description": "Windows 透明代理注入工具 — 为 Antigravity 助手提供全流程自动化代理方案（内置中继、hosts 劫持、状态监控）。",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "318182456",
   "author": "318182456",
   "repository": {
@@ -129,6 +129,21 @@
           "type": "boolean",
           "default": true,
           "description": "在状态栏右侧显示「AG-Proxy」运行状态（绿/黄/红）。关闭后不占用状态栏，扩展功能仍可通过命令面板与配置页使用。"
+        },
+        "antigravity-proxy.refreshQuotaWhenReady": {
+          "type": "boolean",
+          "default": true,
+          "description": "额度充沛，处于就绪状态时，调用ai 刷新额度"
+        },
+        "antigravity-proxy.refreshStartTime": {
+          "type": "integer",
+          "default": 5,
+          "description": "自动刷新额度周期的开始时间（小时，0-23）"
+        },
+        "antigravity-proxy.refreshEndTime": {
+          "type": "integer",
+          "default": 24,
+          "description": "自动刷新额度周期的结束时间（小时，1-24）"
         }
       }
     }

@@ -16,6 +16,12 @@ export interface ProxyConfig {
     autoPrepareHostsRelay: boolean;
     /** 是否在右下角状态栏显示 AG-Proxy 状态指示 */
     showStatusBar: boolean;
+    /** 额度充沛，处于就绪状态时，调用ai 刷新额度 */
+    refreshQuotaWhenReady: boolean;
+    /** 自动刷新额度周期的开始时间（小时，0-23） */
+    refreshStartTime: number;
+    /** 自动刷新额度周期的结束时间（小时，1-24） */
+    refreshEndTime: number;
 }
 
 const CONFIG_SECTION = 'antigravity-proxy';
@@ -36,6 +42,9 @@ export function normalizeProxyConfigFromUI(raw: unknown): ProxyConfig {
         autoStart: o.autoStart === true,
         autoPrepareHostsRelay: o.autoPrepareHostsRelay !== false,
         showStatusBar: o.showStatusBar !== false,
+        refreshQuotaWhenReady: o.refreshQuotaWhenReady === true,
+        refreshStartTime: Math.trunc(Number(o.refreshStartTime ?? 5)),
+        refreshEndTime: Math.trunc(Number(o.refreshEndTime ?? 24)),
     };
 }
 
@@ -59,6 +68,9 @@ export function getConfig(): ProxyConfig {
         autoStart: cfg.get<boolean>('autoStart', false),
         autoPrepareHostsRelay: cfg.get<boolean>('autoPrepareHostsRelay', true),
         showStatusBar: cfg.get<boolean>('showStatusBar', true),
+        refreshQuotaWhenReady: cfg.get<boolean>('refreshQuotaWhenReady', true),
+        refreshStartTime: cfg.get<number>('refreshStartTime', 5),
+        refreshEndTime: cfg.get<number>('refreshEndTime', 24),
     };
 }
 
@@ -127,6 +139,15 @@ export async function updateConfig(config: Partial<ProxyConfig>): Promise<void> 
     }
     if (config.showStatusBar !== undefined) {
         await applySettingsToAllScopes([['showStatusBar', config.showStatusBar]]);
+    }
+    if (config.refreshQuotaWhenReady !== undefined) {
+        await applySettingsToAllScopes([['refreshQuotaWhenReady', config.refreshQuotaWhenReady]]);
+    }
+    if (config.refreshStartTime !== undefined) {
+        await applySettingsToAllScopes([['refreshStartTime', config.refreshStartTime]]);
+    }
+    if (config.refreshEndTime !== undefined) {
+        await applySettingsToAllScopes([['refreshEndTime', config.refreshEndTime]]);
     }
 
     log('配置已更新到用户 / 工作区 / 各文件夹作用域');

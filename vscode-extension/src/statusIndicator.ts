@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 
-import { fetchTrueQuota } from './trueQuotaFetcher';
+import { fetchTrueQuota, triggerVirtualDialogueForReset } from './trueQuotaFetcher';
 
 /** 仅展示状态；点击一律打开配置（不绑定启动/停止，降低宿主崩溃风险） */
 export type IndicatorState = 'ok' | 'bad' | 'starting';
@@ -9,6 +9,8 @@ let item: vscode.StatusBarItem | undefined;
 let quotaItem: vscode.StatusBarItem | undefined;
 let lastState: IndicatorState = 'bad';
 let trueQuotaTimer: NodeJS.Timeout | undefined;
+let lastGeminiResetCalled = false;
+let lastClaudeResetCalled = false;
 
 // 核心模型限额状态定义：与官方配额大面板完美一一对应
 export interface QuotaState {
@@ -21,6 +23,8 @@ export interface QuotaState {
     claudeFiveHourResetTime?: string; // Claude 5小时刷新时间
     geminiWeeklyResetTime?: string;   // Gemini 每周刷新时间
     claudeWeeklyResetTime?: string;   // Claude 每周刷新时间
+    geminiLabel?: string;            // Gemini 真实模型标签
+    claudeLabel?: string;            // Claude 真实模型标签
 }
 
 let extContext: vscode.ExtensionContext | undefined;
@@ -122,6 +126,54 @@ export function updateQuota(newQuota: Partial<QuotaState>): void {
         try {
             listener(currentQuota);
         } catch {}
+    }
+
+    // 自动激活逻辑：Gemini 5小时额度充沛且处于就绪状态时，单独自动发起虚拟对话刷新
+    if (currentQuota.geminiFiveHour === 100 && currentQuota.geminiLabel) {
+        const config = vscode.workspace.getConfiguration('antigravity-proxy');
+        const refreshWhenReady = config.get<boolean>('refreshQuotaWhenReady', true);
+        
+        const startTime = config.get<number>('refreshStartTime', 5);
+        const endTime = config.get<number>('refreshEndTime', 24);
+        const currentHour = new Date().getHours();
+        let isInTimeRange = false;
+        if (startTime <= endTime) {
+            isInTimeRange = currentHour >= startTime && currentHour < endTime;
+        } else {
+            isInTimeRange = currentHour >= startTime || currentHour < endTime;
+        }
+
+        if (refreshWhenReady && isInTimeRange && !lastGeminiResetCalled) {
+            lastGeminiResetCalled = true;
+            void triggerVirtualDialogueForReset('gemini', currentQuota.geminiLabel);
+        }
+    } else {
+        // 当额度被消耗低于 100% 时，重置标志，以等待下一次回到 100%
+        lastGeminiResetCalled = false;
+    }
+
+    // 自动激活逻辑：Claude 5小时额度充沛且处于就绪状态时，单独自动发起虚拟对话刷新
+    if (currentQuota.claudeFiveHour === 100 && currentQuota.claudeLabel) {
+        const config = vscode.workspace.getConfiguration('antigravity-proxy');
+        const refreshWhenReady = config.get<boolean>('refreshQuotaWhenReady', true);
+        
+        const startTime = config.get<number>('refreshStartTime', 5);
+        const endTime = config.get<number>('refreshEndTime', 24);
+        const currentHour = new Date().getHours();
+        let isInTimeRange = false;
+        if (startTime <= endTime) {
+            isInTimeRange = currentHour >= startTime && currentHour < endTime;
+        } else {
+            isInTimeRange = currentHour >= startTime || currentHour < endTime;
+        }
+
+        if (refreshWhenReady && isInTimeRange && !lastClaudeResetCalled) {
+            lastClaudeResetCalled = true;
+            void triggerVirtualDialogueForReset('claude', currentQuota.claudeLabel);
+        }
+    } else {
+        // 当额度被消耗低于 100% 时，重置标志，以等待下一次回到 100%
+        lastClaudeResetCalled = false;
     }
 }
 

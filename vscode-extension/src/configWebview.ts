@@ -222,6 +222,24 @@ function escapeAttr(value: string | number): string {
 }
 
 function getWebviewContent(config: ProxyConfig): string {
+  // 生成开始时间 options (0 - 23)
+  let startOptions = "";
+  for (let i = 0; i <= 23; i++) {
+    const selected = config.refreshStartTime === i ? "selected" : "";
+    startOptions += `<option value="${i}" ${selected}>${i} 点</option>`;
+  }
+
+  // 生成结束时间 options (1 - 24)
+  let endOptions = "";
+  for (let i = 1; i <= 24; i++) {
+    const selected = config.refreshEndTime === i ? "selected" : "";
+    endOptions += `<option value="${i}" ${selected}>${i} 点</option>`;
+  }
+
+  const quota = getQuota();
+  const currentGeminiLabel = quota.geminiLabel ? `包括 ${quota.geminiLabel} 等模型` : "正在获取模型信息...";
+  const currentClaudeLabel = quota.claudeLabel ? `包括 ${quota.claudeLabel} 等模型` : "正在获取模型信息...";
+
   const appDefaultHint =
     "Antigravity IDE.exe / Antigravity.exe 的安装路径（留空将自动检测 %LOCALAPPDATA%）";
 
@@ -345,12 +363,18 @@ function getWebviewContent(config: ProxyConfig): string {
             gap: 12px;
             margin-bottom: 14px;
         }
+        .form-row-checkbox {
+            align-items: center;
+        }
         .form-label {
             width: 120px;
             flex-shrink: 0;
             font-size: 13px;
             padding-top: 6px;
             color: var(--vscode-foreground);
+        }
+        .form-row-checkbox .form-label {
+            padding-top: 0;
         }
         .form-input-group {
             flex: 1;
@@ -693,94 +717,6 @@ function getWebviewContent(config: ProxyConfig): string {
 
     <div id="banner" class="banner"></div>
 
-    <!-- 代理设置 -->
-    <div class="section">
-        <div class="section-title">🌐 代理设置</div>
-
-        <div class="form-row">
-            <div class="form-label">代理地址</div>
-            <div class="form-input-group">
-                <input type="text" id="host" value="${escapeAttr(config.host)}" placeholder="127.0.0.1" />
-                <div id="status-host" class="validation-status"></div>
-            </div>
-        </div>
-
-        <div class="form-row">
-            <div class="form-label">代理端口</div>
-            <div class="form-input-group">
-                <input type="number" id="port" value="${escapeAttr(config.port)}" min="1" max="65535" placeholder="10808" />
-                <div id="status-port" class="validation-status"></div>
-            </div>
-        </div>
-
-        <div class="form-row">
-            <div class="form-label">代理类型</div>
-            <div class="form-input-group">
-                <select id="type">
-                    <option value="socks5" ${config.type === "socks5" ? "selected" : ""}>SOCKS5</option>
-                    <option value="http" ${config.type === "http" ? "selected" : ""}>HTTP</option>
-                </select>
-            </div>
-        </div>
-
-        <div class="form-row">
-            <div class="form-label">连接超时</div>
-            <div class="form-input-group">
-                <div class="form-input-row">
-                    <input type="number" id="timeout" value="${escapeAttr(config.timeout)}" min="1000" max="30000" />
-                    <span class="hint">毫秒</span>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 路径设置 -->
-    <div class="section">
-        <div class="section-title">📁 路径设置</div>
-
-        <div class="form-row">
-            <div class="form-label">Antigravity 路径</div>
-            <div class="form-input-group">
-                <div class="form-input-row">
-                    <input type="text" id="antigravityAppPath" value="${escapeAttr(config.antigravityAppPath)}" placeholder="留空自动检测" />
-                    <button class="secondary browse-btn" onclick="browse('antigravityAppPath')">浏览...</button>
-                    <button class="secondary browse-btn" onclick="detectAntigravity()">自动检测</button>
-                </div>
-                <div class="hint">${appDefaultHint}</div>
-                <div id="status-antigravityAppPath" class="validation-status"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- 其它设置 -->
-    <div class="section">
-        <div class="section-title">⚙️ 其它设置</div>
-
-        <div class="form-row">
-            <div class="form-label">自启动</div>
-            <div class="checkbox-row">
-                <input type="checkbox" id="autoStart" ${config.autoStart ? "checked" : ""} />
-                <span class="hint">编辑器启动后自动开启代理进程</span>
-            </div>
-        </div>
-
-        <div class="form-row">
-            <div class="form-label">自动准备环境</div>
-            <div class="checkbox-row">
-                <input type="checkbox" id="autoPrepareHostsRelay" ${config.autoPrepareHostsRelay ? "checked" : ""} />
-                <span class="hint">扩展激活后，若检测到 hosts 劫持或中继未就绪，自动写入 hosts 并启动中继</span>
-            </div>
-        </div>
-
-        <div class="form-row">
-            <div class="form-label">状态栏状态</div>
-            <div class="checkbox-row">
-                <input type="checkbox" id="showStatusBar" ${config.showStatusBar ? "checked" : ""} />
-                <span class="hint">在状态栏右侧显示运行状态图标</span>
-            </div>
-        </div>
-    </div>
-
     <!-- 模型配额 -->
     <div class="section">
         <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
@@ -798,7 +734,7 @@ function getWebviewContent(config: ProxyConfig): string {
             <div class="quota-card">
                 <div class="quota-card-header">
                     <span class="quota-card-title">Gemini Models</span>
-                    <span class="quota-card-icon" title="包括 Gemini 3.5 Pro/Flash 等模型">ⓘ</span>
+                    <span class="quota-card-icon" id="gemini-card-icon" title="${currentGeminiLabel}">ⓘ</span>
                 </div>
                 
                 <div class="quota-card-body">
@@ -840,7 +776,7 @@ function getWebviewContent(config: ProxyConfig): string {
             <div class="quota-card">
                 <div class="quota-card-header">
                     <span class="quota-card-title">Claude & GPT Models</span>
-                    <span class="quota-card-icon" title="包括 Claude 3.5 Sonnet, GPT-4o 等模型">ⓘ</span>
+                    <span class="quota-card-icon" id="claude-card-icon" title="${currentClaudeLabel}">ⓘ</span>
                 </div>
                 
                 <div class="quota-card-body">
@@ -880,6 +816,113 @@ function getWebviewContent(config: ProxyConfig): string {
         </div>
     </div>
 
+    <!-- 代理设置 -->
+    <div class="section">
+        <div class="section-title">🌐 代理设置</div>
+
+        <div class="form-row">
+            <div class="form-label">代理地址</div>
+            <div class="form-input-group">
+                <input type="text" id="host" value="${escapeAttr(config.host)}" placeholder="127.0.0.1" />
+                <div id="status-host" class="validation-status"></div>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-label">代理端口</div>
+            <div class="form-input-group">
+                <input type="number" id="port" value="${escapeAttr(config.port)}" min="1" max="65535" placeholder="10808" />
+                <div id="status-port" class="validation-status"></div>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-label">代理类型</div>
+            <div class="form-input-group">
+                <div class="form-input-row" style="gap: 16px;">
+                    <select id="type" style="flex: 1;">
+                        <option value="socks5" ${config.type === "socks5" ? "selected" : ""}>SOCKS5</option>
+                        <option value="http" ${config.type === "http" ? "selected" : ""}>HTTP</option>
+                    </select>
+                    <span class="form-label" style="width: auto; padding-top: 0; flex-shrink: 0; color: var(--vscode-foreground);">连接超时</span>
+                    <input type="number" id="timeout" value="${escapeAttr(config.timeout)}" min="1000" max="30000" style="flex: 1; min-width: 80px;" />
+                    <span class="hint" style="flex-shrink: 0;">毫秒</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 路径设置 -->
+    <div class="section">
+        <div class="section-title">📁 路径设置</div>
+
+        <div class="form-row">
+            <div class="form-label">Antigravity 路径</div>
+            <div class="form-input-group">
+                <div class="form-input-row">
+                    <input type="text" id="antigravityAppPath" value="${escapeAttr(config.antigravityAppPath)}" placeholder="留空自动检测" />
+                    <button class="secondary browse-btn" onclick="browse('antigravityAppPath')">浏览...</button>
+                    <button class="secondary browse-btn" onclick="detectAntigravity()">自动检测</button>
+                </div>
+                <div class="hint">${appDefaultHint}</div>
+                <div id="status-antigravityAppPath" class="validation-status"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 其它设置 -->
+    <div class="section">
+        <div class="section-title">⚙️ 其它设置</div>
+
+        <div class="form-row form-row-checkbox">
+            <div class="form-label">自启动</div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="autoStart" ${config.autoStart ? "checked" : ""} />
+                <span class="hint">编辑器启动后自动开启代理进程</span>
+            </div>
+        </div>
+
+        <div class="form-row form-row-checkbox">
+            <div class="form-label">自动准备环境</div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="autoPrepareHostsRelay" ${config.autoPrepareHostsRelay ? "checked" : ""} />
+                <span class="hint">扩展激活后，若检测到 hosts 劫持或中继未就绪，自动写入 hosts 并启动中继</span>
+            </div>
+        </div>
+
+        <div class="form-row form-row-checkbox">
+            <div class="form-label">状态栏状态</div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="showStatusBar" ${config.showStatusBar ? "checked" : ""} />
+                <span class="hint">在状态栏右侧显示运行状态图标</span>
+            </div>
+        </div>
+
+        <div class="form-row form-row-checkbox">
+            <div class="form-label">就绪时刷新</div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="refreshQuotaWhenReady" ${config.refreshQuotaWhenReady ? "checked" : ""} />
+                <span class="hint">额度充沛，处于就绪状态时，调用ai 刷新额度</span>
+            </div>
+        </div>
+
+        <div class="form-row" id="timeRangeRow" style="${config.refreshQuotaWhenReady ? '' : 'display: none;'}">
+            <div class="form-label">刷新时间段</div>
+            <div class="form-input-group">
+                <div class="form-input-row">
+                    <select id="refreshStartTime" style="width: 100px; flex: none;">
+                        ${startOptions}
+                    </select>
+                    <span style="margin: 0 4px;">至</span>
+                    <select id="refreshEndTime" style="width: 100px; flex: none;">
+                        ${endOptions}
+                    </select>
+                    <span class="hint" style="margin-left: 8px;">在此本地时间段内允许自动发起虚拟对话刷新</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
     ${envSectionHtml}
 
     ${restoreSectionHtml}
@@ -891,6 +934,17 @@ function getWebviewContent(config: ProxyConfig): string {
 
     <script>
         const vscode = acquireVsCodeApi();
+
+        // 联动控制时间段行的显示/隐藏
+        const readyCheckbox = document.getElementById('refreshQuotaWhenReady');
+        if (readyCheckbox) {
+            readyCheckbox.addEventListener('change', function(e) {
+                const row = document.getElementById('timeRangeRow');
+                if (row) {
+                    row.style.display = e.target.checked ? '' : 'none';
+                }
+            });
+        }
 
         // 刷新模型配额，向插件后台发送刷新指令进行同步
         function refreshQuota() {
@@ -964,6 +1018,16 @@ function getWebviewContent(config: ProxyConfig): string {
                     }
                 }
             });
+
+            // 动态更新 Gemini 和 Claude 卡片真实的提示模型值
+            const geminiIcon = document.getElementById('gemini-card-icon');
+            if (geminiIcon && lastQuotaState.geminiLabel) {
+                geminiIcon.setAttribute('title', '包括 ' + lastQuotaState.geminiLabel + ' 等模型');
+            }
+            const claudeIcon = document.getElementById('claude-card-icon');
+            if (claudeIcon && lastQuotaState.claudeLabel) {
+                claudeIcon.setAttribute('title', '包括 ' + lastQuotaState.claudeLabel + ' 等模型');
+            }
         }
 
         function getFormValues() {
@@ -977,6 +1041,9 @@ function getWebviewContent(config: ProxyConfig): string {
                 autoStart: document.getElementById('autoStart').checked,
                 autoPrepareHostsRelay: document.getElementById('autoPrepareHostsRelay').checked,
                 showStatusBar: document.getElementById('showStatusBar').checked,
+                refreshQuotaWhenReady: document.getElementById('refreshQuotaWhenReady').checked,
+                refreshStartTime: parseInt(document.getElementById('refreshStartTime').value, 10) || 5,
+                refreshEndTime: parseInt(document.getElementById('refreshEndTime').value, 10) || 24,
             };
         }
 
