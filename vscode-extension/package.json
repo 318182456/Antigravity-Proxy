@@ -1,18 +1,18 @@
 {
   "name": "antigravity-proxy",
   "displayName": "Antigravity Proxy",
-  "description": "macOS 透明代理注入工具 — 为 Antigravity 助手提供全流程自动化代理方案（编译、签名、注入、状态监控）。",
-  "version": "0.0.6",
-  "publisher": "raybz",
-  "author": "ray",
+  "description": "Windows 透明代理注入工具 — 为 Antigravity 助手提供全流程自动化代理方案（内置中继、hosts 劫持、状态监控）。",
+  "version": "0.0.1",
+  "publisher": "318182456",
+  "author": "318182456",
   "repository": {
     "type": "git",
-    "url": "https://github.com/raybz/Antigravity-Proxy.git"
+    "url": "https://github.com/318182456/Antigravity-Proxy.git"
   },
   "bugs": {
-    "url": "https://github.com/raybz/Antigravity-Proxy/issues"
+    "url": "https://github.com/318182456/Antigravity-Proxy/issues"
   },
-  "homepage": "https://github.com/raybz/Antigravity-Proxy",
+  "homepage": "https://github.com/318182456/Antigravity-Proxy",
   "license": "MIT",
   "icon": "icon.png",
   "engines": {
@@ -25,7 +25,7 @@
   "keywords": [
     "proxy",
     "socks5",
-    "macos",
+    "windows",
     "transparent-proxy",
     "antigravity",
     "clash",
@@ -45,11 +45,6 @@
       {
         "command": "antigravity-proxy.stop",
         "title": "⏹ 停止代理",
-        "category": "Antigravity Proxy"
-      },
-      {
-        "command": "antigravity-proxy.resign",
-        "title": "🔑 强制重签名",
         "category": "Antigravity Proxy"
       },
       {
@@ -74,7 +69,7 @@
       },
       {
         "command": "antigravity-proxy.prepareEnvironment",
-        "title": "🔧 准备特权环境（hosts + relay，需 sudo）",
+        "title": "🔄 重新启动特权服务（写入 hosts 并重启中继）",
         "category": "Antigravity Proxy"
       },
       {
@@ -83,18 +78,8 @@
         "category": "Antigravity Proxy"
       },
       {
-        "command": "antigravity-proxy.restoreStock",
-        "title": "🛑 恢复默认（清 hosts/中继 + 移除注入）",
-        "category": "Antigravity Proxy"
-      },
-      {
         "command": "antigravity-proxy.restoreNoProxy",
-        "title": "🔕 完全停用代理（网络与未使用本扩展一致）",
-        "category": "Antigravity Proxy"
-      },
-      {
-        "command": "antigravity-proxy.installSudoHelper",
-        "title": "🔐 一次性安装免密 sudo（写入 /usr/local/bin + sudoers）",
+        "title": "🔕 完全停用代理（恢复 hosts/中继）",
         "category": "Antigravity Proxy"
       }
     ],
@@ -108,7 +93,7 @@
         },
         "antigravity-proxy.proxyPort": {
           "type": "number",
-          "default": 10808,
+          "default": 7890,
           "description": "代理服务器端口"
         },
         "antigravity-proxy.proxyType": {
@@ -128,7 +113,7 @@
         "antigravity-proxy.antigravityAppPath": {
           "type": "string",
           "default": "",
-          "description": "Antigravity.app 安装路径（留空自动检测）"
+          "description": "Antigravity IDE.exe / Antigravity.exe 安装路径（留空自动检测）"
         },
         "antigravity-proxy.autoStart": {
           "type": "boolean",
@@ -138,7 +123,7 @@
         "antigravity-proxy.autoPrepareHostsRelay": {
           "type": "boolean",
           "default": true,
-          "description": "已安装免密 sudo helper 且未开「自动启动代理」时：扩展激活后若检测到 hosts/SNI 中继未就绪，自动执行「准备特权环境」。免密仅免除 sudo 密码，不会替代此步骤。"
+          "description": "Windows 激活后，若检测到 hosts 或本地中继未就绪，自动执行「重新启动」写入 hosts 并重启中继。"
         },
         "antigravity-proxy.showStatusBar": {
           "type": "boolean",

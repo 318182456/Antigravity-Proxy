@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 import { log } from './logger';
 import { detectAntigravityPath } from './validator';
 
@@ -192,7 +193,7 @@ dns:
 `;
 
     // 固定路径保证每次启动 Antigravity 读取同一份配置，不因时间戳变化而失效
-    const yamlPath = path.join('/tmp', 'antigravity-config.yaml');
+    const yamlPath = path.join(os.tmpdir(), 'antigravity-config.yaml');
 
     try {
         fs.writeFileSync(yamlPath, content, 'utf-8');

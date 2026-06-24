@@ -1,125 +1,83 @@
-# Antigravity-Proxy for macOS 🚀
+# Antigravity-Proxy Windows 🚀
 
-<p align="center">
-  <a href="./README.md"><b>English</b></a>
-  &nbsp;·&nbsp;
-  <a href="./README.zh-CN.md"><b>简体中文</b></a>
-</p>
-
-<p align="center">
-  <img src="vscode-extension/icon.png" width="128" alt="Antigravity Proxy Icon"/>
-</p>
-
-> Transparent proxy injection for macOS using `DYLD_INSERT_LIBRARIES`, routing Antigravity (and other processes) through SOCKS5/HTTP **without** a TUN/TAP virtual NIC.
+`Antigravity-Proxy` 是一款专门为 Windows 平台定制的透明代理注入工具，旨在为 **Antigravity** 提供全流程自动化代理方案（内置中继、hosts 域名劫持、状态监控），完美解决 Antigravity 及其内部语言服务（Language Server）在 Windows 平台下不走系统代理、绕过标准代理协议的问题。
 
 ---
 
-## Introduction
+## 工作原理
 
-**Repository:** [github.com/raybz/Antigravity-Proxy](https://github.com/raybz/Antigravity-Proxy)
+由于 Antigravity 及其内部组件（如 Go 语言编写的 Language Server）使用原生的 DNS 解析器且经常绕过标准系统代理，本工具结合了 **Hosts 劫持**、**本地 443 端口 SNI 中继** 和 **子进程环境变量注入** 等技术，实现无缝、绿色的流量透明代理（无需创建 TUN/TAP 虚拟网卡）。
 
-`Antigravity-Proxy` fixes **Antigravity not respecting the system proxy**. Its language server uses Go’s DNS resolver and bypasses typical macOS proxy hooks. This project combines **`/etc/hosts`**, an **SNI relay on :443**, and **`DYLD_INSERT_LIBRARIES` injection** to steer traffic through your SOCKS5/HTTP proxy.
+| 层级 | 技术方案 | 作用与机制 |
+|------|-----------|------------|
+| **DNS 层** | 写入系统 `hosts` → `127.0.0.2` | 将 Google / Gemini 相关 API 域名强行路由至本地 |
+| **连接层** | 内置 Node.js 中继服务（`127.0.0.2:443`） | 解析 TLS 握手中的 SNI，提取目标域名并通过上游代理转发 |
+| **注入层** | 子进程环境变量注入（`child_injection`） | 启动 `Antigravity.exe` 并强行注入 `ALL_PROXY` / `HTTP_PROXY` 代理配置 |
 
-| Layer | Technique | Role |
-|------|-----------|------|
-| DNS | `/etc/hosts` → `127.0.0.1` | Go resolver reads hosts first |
-| Conn | `antigravity-relay` :443 | TLS SNI → SOCKS5 |
-| Injection | `libantigravity.dylib` | Hook `connect` / `getaddrinfo` |
-
-**Pain points:** language server ignores system proxy; avoid full VPN; proxy ad‑hoc commands.
-
----
-
-## Features
-
-- Transparent hijack via injection  
-- Dylib hooks + SNI relay  
-- FakeIP mapping  
-- Path detection & signing automation  
-- [VS Code extension](vscode-extension/README.md#readme-lang-en) UI  
-
-> With the current scripts, hosts and the relay **can persist** after you quit Antigravity (legacy `EXIT` traps that wiped hosts are removed).
+> [!TIP]
+> **巧妙的 IP 避让方案**：
+> 本工具的内置中继独占监听 **`127.0.0.2:443`**，而非传统的 `127.0.0.1:443`。这确保了它与您本地开发可能正在运行的、监听在 `127.0.0.1:443` 的 Nginx 等 Web 服务**完美共存，互不冲突**。
 
 ---
 
-## Quick start
+## 核心功能
 
-### VS Code extension (recommended)
-
-Install `vscode-extension/antigravity-proxy-*.vsix`. Extension docs (same file): [English](vscode-extension/README.md#readme-lang-en) · [简体中文](vscode-extension/README.md#readme-lang-zh).
-
-### CLI
-
-**1. Prerequisites**
-
-```bash
-xcode-select --install
-```
-
-**2. Configure** — edit `config.yaml`:
-
-```yaml
-proxy:
-  host: "127.0.0.1"
-  port: 10808
-  type: "socks5"   # or http
-```
-
-**3. Run**
-
-```bash
-make          # build → sign → launch Antigravity with injection
-make build
-make sign
-make run
-```
-
-**4. Useful targets**
-
-```bash
-make resign   # after Antigravity update
-make kill
-make clean
-make help
-```
-
-**5. One-off command**
-
-```bash
-DYLD_INSERT_LIBRARIES=bin/libantigravity.dylib \
-  ANTIGRAVITY_CONFIG=config.yaml \
-  curl -v https://example.com
-```
+- **本地 SNI 中继**：采用轻量级 Node.js 服务接管本地 `127.0.0.2:443` 端口，透明代理所有 HTTPS 握手流量。
+- **单次安全 Hosts 写入**：优化了 Hosts 文件写入算法，将原本的高频追加操作重构为内存拼接后的“单次批量写入”，彻底规避 Windows Defender、火绒等杀毒软件的主动防御行为拦截。
+- **VS Code 插件配置页**：提供图形化配置面板，一键配置、校验、保存，支持环境一键检测诊断。
+- **自动环境就绪**：插件激活后，能全自动检测 hosts 劫持与本地中继的健康状况，若未就绪将自动执行环境准备。
 
 ---
 
-## How it works
+## 快速上手 (VS Code 扩展)
 
-`make run` writes hosts → starts the :443 relay (SNI → SOCKS5) → launches Antigravity with the dylib injected.
+### 1. 安装插件
+直接在 VS Code 中安装 `vscode-extension/antigravity-proxy-*.vsix` 扩展包。
+
+### 2. 配置代理与路径
+1. 在 VS Code 中打开本插件的 **配置页面**（⚙️ 打开配置页面）。
+2. 输入您的上游代理参数（如 `127.0.0.1` 端口 `10808` SOCKS5）。
+3. 指定 `Antigravity IDE.exe` 或 `Antigravity.exe` 的安装路径（支持留空自动检测）。
+4. 点击 **保存配置**。
+
+### 3. 一键准备与启动
+1. 在配置页面或诊断面板中，点击 **🔧 准备特权环境**。
+2. Windows 会弹出 UAC 提权申请（允许 PowerShell 修改系统设置），**请点击“是”**。插件会极速一次性将 7 个代理域名安全写入系统 hosts。
+3. 点击 **🚀 启动代理**。
+4. 此时状态栏图标变绿，Antigravity 即可流畅地在代理网络下运行。
 
 ---
 
-## Limits & notes
+## 常见问题与排查
 
-- **SIP:** injection does not apply to SIP‑protected system binaries; use copies under your home directory or Homebrew builds.  
-- **sudo:** editing hosts, binding :443, and codesign require admin rights.  
-- **Updates:** re-run signing after each Antigravity update (`make resign` or the extension command).
+### 1. 本地 Nginx 与 443 端口冲突
+如果启动时遇到 `listen EACCES: permission denied 127.0.0.2:443`，且提示端口被 Nginx 占用：
+- **原因**：您的 Nginx 配置文件中使用了通配监听 `listen 443 ssl;`，在 Windows 底层这等同于 `0.0.0.0:443`，从而强行霸占了包括 `127.0.0.2` 在内的所有本地回回环 IP。
+- **解决办法**：请将 Nginx 的监听精确化，仅监听特定的 IP。例如将 `nginx.conf` 中的监听修改为：
+  ```nginx
+  listen 127.0.0.1:443 ssl;
+  listen [您的局域网IP]:443 ssl;
+  ```
+  或者直接将 Nginx 的本地开发端口修改为 `8443`（`listen 8443 ssl;`），把 443 端口完全空闲出来。
+
+### 2. 杀毒软件对 Hosts 修改的拦截
+本工具已将 Hosts 写入优化为单次 I/O 覆写，极大地降低了拦截率。如果您的杀毒软件（如 360 安全卫士、火绒等）依然弹出恶意行为警告，请选择 **“允许本次操作”** 或将本插件的 Node.js 进程临时加入白名单。
 
 ---
 
-## Repository layout
+## 仓库结构
 
-```
+```text
 Antigravity-Proxy/
-├── src/
-├── bin/
-├── config.yaml
-├── Makefile
-└── vscode-extension/
+├── src/                    # 代理核心 C 源码
+├── config.yaml             # 代理配置文件
+└── vscode-extension/       # VS Code 插件源码（已彻底移除 macOS 残留）
+    ├── src/                # 插件 TypeScript 源码
+    └── out/                # 编译后的 JavaScript 产物
 ```
 
 ---
 
-## License
+## 许可证
 
-MIT — concept inspired by [yuaotian/antigravity-proxy](https://github.com/yuaotian/antigravity-proxy) (Windows).
+MIT License

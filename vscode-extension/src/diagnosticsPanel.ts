@@ -3,7 +3,6 @@ import { collectDiagnostics } from './diagnostics';
 import { getConfig } from './configManager';
 import { log } from './logger';
 import { preparePrivilegedEnvironment, cleanupPrivilegedEnvironment, restoreStockBehavior } from './proxyManager';
-import { installSudoHelper } from './installHelper';
 
 let panel: vscode.WebviewPanel | undefined;
 
@@ -69,19 +68,8 @@ export function openDiagnosticsPanel(context: vscode.ExtensionContext): void {
                 case 'openSettings':
                     await vscode.commands.executeCommand('antigravity-proxy.openSettings');
                     break;
-                case 'resign':
-                    await vscode.commands.executeCommand('antigravity-proxy.resign');
-                    break;
                 case 'showLog':
                     await vscode.commands.executeCommand('antigravity-proxy.showLog');
-                    break;
-                case 'installSudoHelper':
-                    installSudoHelper(context);
-                    break;
-                case 'openSystemProxy':
-                    await vscode.env.openExternal(
-                        vscode.Uri.parse('x-apple.systempreferences:com.apple.preference.network?Proxies')
-                    );
                     break;
                 default:
                     break;
@@ -173,7 +161,7 @@ function getHtml(): string {
   <div class="sub" id="summary"></div>
   <div class="toolbar">
     <button id="btnRefresh">🔄 重新检测</button>
-    <button id="btnPrepare" class="secondary">🔧 准备特权环境（hosts + relay）</button>
+    <button id="btnPrepare" class="secondary">🔄 重新启动（hosts + relay）</button>
     <button id="btnInstallSudo" class="secondary">🔐 安装免密 sudo（首次需密码）</button>
     <button id="btnCleanup" class="secondary">🧹 仅清理 hosts + relay</button>
     <button id="btnRestoreStock" class="secondary">🔕 完全停用代理（未使用扩展时）</button>

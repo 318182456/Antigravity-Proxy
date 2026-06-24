@@ -1,4 +1,10 @@
 {
-    "antigravity-proxy.autoStart": false,
-    "antigravity-proxy.autoPrepareHostsRelay": false
+    "antigravity-proxy.autoStart": true,
+    "antigravity-proxy.autoPrepareHostsRelay": true,
+    "antigravity-proxy.proxyHost": "127.0.0.1",
+    "antigravity-proxy.proxyPort": 7890,
+    "antigravity-proxy.proxyType": "socks5",
+    "antigravity-proxy.timeout": 5000,
+    "antigravity-proxy.antigravityAppPath": "C:\\Users\\admin\\AppData\\Local\\Programs\\Antigravity IDE\\Antigravity IDE.exe",
+    "antigravity-proxy.showStatusBar": true
 }

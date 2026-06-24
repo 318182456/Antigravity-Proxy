@@ -149,9 +149,24 @@ export function validateHost(host: string): ValidationResult {
 
 
 /**
- * 自动检测 Antigravity.app 路径
+ * 自动检测 Antigravity 路径
  */
 export function detectAntigravityPath(): string | null {
+    if (process.platform === 'win32') {
+        const localAppData = process.env.LOCALAPPDATA || '';
+        const candidates = [
+            path.join(localAppData, 'Programs', 'Antigravity IDE', 'Antigravity IDE.exe'),
+            path.join(localAppData, 'Programs', 'Antigravity', 'Antigravity.exe'),
+        ];
+        for (const p of candidates) {
+            if (fs.existsSync(p)) {
+                log(`自动检测到 Antigravity: ${p}`);
+                return p;
+            }
+        }
+        return null;
+    }
+
     const candidates = [
         '/Applications/Antigravity.app',
         `${process.env.HOME}/Applications/Antigravity.app`,
@@ -166,27 +181,54 @@ export function detectAntigravityPath(): string | null {
 }
 
 /**
- * 校验 Antigravity.app 路径
+ * 校验 Antigravity 路径
  */
 export function validateAntigravityPath(appPath: string): ValidationResult {
+    const isWin = process.platform === 'win32';
+    const termName = isWin ? 'Antigravity.exe / Antigravity IDE.exe' : 'Antigravity.app';
+
     if (!appPath || appPath.trim().length === 0) {
         const detected = detectAntigravityPath();
         if (detected) {
             return { field: 'antigravityAppPath', valid: true, message: `✅ 自动检测到: ${detected}` };
         }
-        return { field: 'antigravityAppPath', valid: false, message: '❌ 未找到 Antigravity.app，请手动指定路径' };
+        return { field: 'antigravityAppPath', valid: false, message: `❌ 未找到 ${termName}，请手动指定路径` };
     }
 
-    if (!fs.existsSync(appPath)) {
-        return { field: 'antigravityAppPath', valid: false, message: `❌ 路径不存在: ${appPath}` };
+    let targetPath = appPath.trim();
+    if (!fs.existsSync(targetPath)) {
+        return { field: 'antigravityAppPath', valid: false, message: `❌ 路径不存在: ${targetPath}` };
     }
 
-    const electron = path.join(appPath, 'Contents', 'MacOS', 'Electron');
-    if (!fs.existsSync(electron)) {
-        return { field: 'antigravityAppPath', valid: false, message: '❌ 该路径不是有效的 Antigravity.app' };
+    if (isWin) {
+        // 如果用户指向的是安装目录，尝试补全为 exe 路径
+        try {
+            const stat = fs.statSync(targetPath);
+            if (stat.isDirectory()) {
+                const ideExe = path.join(targetPath, 'Antigravity IDE.exe');
+                const stdExe = path.join(targetPath, 'Antigravity.exe');
+                if (fs.existsSync(ideExe)) {
+                    targetPath = ideExe;
+                } else if (fs.existsSync(stdExe)) {
+                    targetPath = stdExe;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+        const ext = path.extname(targetPath).toLowerCase();
+        const base = path.basename(targetPath).toLowerCase();
+        if (ext !== '.exe' || (!base.includes('antigravity') && !base.includes('electron'))) {
+            return { field: 'antigravityAppPath', valid: false, message: '❌ 该路径不是有效的 Antigravity 可执行程序 (.exe)' };
+        }
+        return { field: 'antigravityAppPath', valid: true, message: `✅ ${path.basename(targetPath)} 路径有效` };
+    } else {
+        const electron = path.join(targetPath, 'Contents', 'MacOS', 'Electron');
+        if (!fs.existsSync(electron)) {
+            return { field: 'antigravityAppPath', valid: false, message: '❌ 该路径不是有效的 Antigravity.app' };
+        }
+        return { field: 'antigravityAppPath', valid: true, message: '✅ Antigravity.app 路径有效' };
     }
-
-    return { field: 'antigravityAppPath', valid: true, message: '✅ Antigravity.app 路径有效' };
 }
 
 /**

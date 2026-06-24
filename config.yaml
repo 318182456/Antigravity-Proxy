@@ -1,7 +1,7 @@
 # Antigravity-Proxy Configuration
 proxy:
   host: "127.0.0.1"
-  port: 10808
+  port: 7890
   type: "socks5"
   timeout: 5000
   child_injection: true

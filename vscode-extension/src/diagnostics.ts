@@ -12,7 +12,7 @@ import {
 } from './validator';
 import { RELAY_DOMAINS, HOSTS_MARKER } from './relayDomains';
 import { RELAY_EXECUTABLE, RELAY_LOG_PATH, RELAY_PID_PATH } from './runtimeConstants';
-import { isSudoHelperInstalled, isHelperBinaryOnlyInstalled, SUDO_HELPER_PATH } from './sudoHelper';
+import { nodeRelayInstance } from './nodeRelay';
 
 export interface DiagnosticItem {
     key: string;
@@ -35,6 +35,13 @@ function execShort(cmd: string, timeout = 8000): Promise<string> {
 }
 
 async function checkRelayProcess(): Promise<{ ok: boolean; detail: string }> {
+    if (process.platform === 'win32') {
+        if (nodeRelayInstance.isRunning()) {
+            return { ok: true, detail: `内置 Node.js SNI 中继运行中，监听在 127.0.0.2:443` };
+        }
+        return { ok: false, detail: '内置 Node.js SNI 中继未启动，请点击「重新启动」或「启动代理」' };
+    }
+
     if (!fs.existsSync(RELAY_PID_PATH)) {
         return { ok: false, detail: `未找到 ${RELAY_PID_PATH}（中继可能未启动）` };
     }
@@ -44,24 +51,29 @@ async function checkRelayProcess(): Promise<{ ok: boolean; detail: string }> {
     }
     // 严格校验 PID 为纯数字，防止文件内容被篡改时命令注入
     if (!/^\d+$/.test(pid)) {
-        return { ok: false, detail: `PID 文件内容非法（${pid}），请重新执行「准备特权环境」` };
+        return { ok: false, detail: `PID 文件内容非法（${pid}），请点击「重新启动」` };
     }
     try {
         await execShort(`ps -p ${pid} -o pid=`);
         return { ok: true, detail: `SNI 中继进程存活 (PID ${pid})，日志: ${RELAY_LOG_PATH}` };
     } catch {
-        return { ok: false, detail: `PID ${pid} 已不存在，请重新执行「准备特权环境」` };
+        return { ok: false, detail: `PID ${pid} 已不存在，请点击「重新启动」` };
     }
 }
 
 function readHostsStatus(): { ok: boolean; detail: string; missing: string[] } {
+    const isWin = process.platform === 'win32';
+    const hostsPath = isWin
+        ? path.join(process.env.windir || 'C:\\Windows', 'System32\\drivers\\etc\\hosts')
+        : '/etc/hosts';
+
     let content: string;
     try {
-        content = fs.readFileSync('/etc/hosts', 'utf-8');
+        content = fs.readFileSync(hostsPath, 'utf-8');
     } catch (e: any) {
         return {
             ok: false,
-            detail: `无法读取 /etc/hosts: ${e.message}`,
+            detail: `无法读取 hosts 文件 (${hostsPath}): ${e.message}`,
             missing: [...RELAY_DOMAINS],
         };
     }
@@ -69,7 +81,7 @@ function readHostsStatus(): { ok: boolean; detail: string; missing: string[] } {
     const lineOk = (domain: string) =>
         lines.some(line => {
             const t = line.trim();
-            return t.includes('127.0.0.1') && t.includes(domain) && t.includes(HOSTS_MARKER);
+            return t.includes('127.0.0.2') && t.includes(domain) && t.includes(HOSTS_MARKER);
         });
     const missing: string[] = [];
     for (const domain of RELAY_DOMAINS) {
@@ -80,7 +92,7 @@ function readHostsStatus(): { ok: boolean; detail: string; missing: string[] } {
     if (missing.length === 0) {
         return {
             ok: true,
-            detail: `已写入 ${RELAY_DOMAINS.length} 个域名 → 127.0.0.1（${HOSTS_MARKER}）`,
+            detail: `已写入 ${RELAY_DOMAINS.length} 个域名 → 127.0.0.2（${HOSTS_MARKER}）`,
             missing: [],
         };
     }
@@ -113,8 +125,16 @@ const ANTIGRAVITY_LSENVIRONMENT_KEYS = [
 
 /** 检查主包 Info.plist 是否仍带 Antigravity 相关 LSEnvironment（Makefile 会写入 DYLD / HTTP_PROXY 等；残留则访达启动仍会注入） */
 function readLSEnvironmentStatus(appPath: string): DiagnosticItem {
-    const plist = path.join(appPath, 'Contents', 'Info.plist');
     const title = 'Info.plist · LSEnvironment';
+    if (process.platform === 'win32') {
+        return {
+            key: 'lsenvironment',
+            title,
+            ok: true,
+            detail: 'Windows 系统无需 Info.plist 注入检查',
+        };
+    }
+    const plist = path.join(appPath, 'Contents', 'Info.plist');
     if (!fs.existsSync(plist)) {
         return {
             key: 'lsenvironment',
@@ -179,7 +199,52 @@ function bundledBin(extensionRoot: string, name: string): { ok: boolean; path: s
  * 这与本扩展的 hosts/relay 无关，但是常见的用户困惑点。
  */
 async function checkSystemProxy(): Promise<DiagnosticItem> {
-    const title = '系统网络代理（macOS 全局）';
+    const title = process.platform === 'win32' ? '系统网络代理（Windows 全局）' : '系统网络代理（macOS 全局）';
+    
+    if (process.platform === 'win32') {
+        try {
+            const enableOut = await execShort(
+                'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyEnable',
+                3000
+            ).catch(() => '');
+            const enabled = enableOut.includes('0x1');
+
+            if (!enabled) {
+                return {
+                    key: 'system_proxy',
+                    title,
+                    ok: true,
+                    detail: '系统代理未启用，全机流量走直连（不受本扩展 hosts/中继影响）',
+                };
+            }
+
+            const serverOut = await execShort(
+                'reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings" /v ProxyServer',
+                3000
+            ).catch(() => '');
+            const match = serverOut.match(/ProxyServer\s+REG_SZ\s+(\S+)/);
+            const proxyServer = match ? match[1] : '未知';
+
+            const isLocal = /^(127\.|localhost|0\.0\.0\.0)/i.test(proxyServer);
+            return {
+                key: 'system_proxy',
+                title,
+                ok: true, // 本地代理为开发环境标准配置，不报红
+                detail: `系统代理已启用：${proxyServer}`,
+                hint: isLocal
+                    ? '代理指向系统本机地址（本地代理客户端工作正常）。若 Clash / V2Ray 等本地代理客户端未运行，全机网络将无法连接。'
+                    : '系统代理指向外部地址，一般无需本扩展干预。',
+            };
+        } catch (e: any) {
+            return {
+                key: 'system_proxy',
+                title,
+                ok: true,
+                detail: `无法读取系统代理设置（Windows 注册表查询失败）: ${e?.message ?? e}`,
+            };
+        }
+    }
+
     try {
         const out = await execShort('scutil --proxy', 5000);
         const enabled: string[] = [];
@@ -215,11 +280,10 @@ async function checkSystemProxy(): Promise<DiagnosticItem> {
         return {
             key: 'system_proxy',
             title,
-            ok: !isLocal,
+            ok: true, // 本地代理为开发环境标准配置，不报红
             detail: `系统代理已启用：${enabled.join('，')}`,
             hint: isLocal
-                ? '代理指向本机地址。若 Clash / V2Ray 未运行，全机网络将无法连接。' +
-                  '不使用代理时请在「系统设置 → 网络 → 代理」关闭，或停止本扩展后由 Clash / V2Ray 管理该设置。'
+                ? '代理指向系统本机地址（本地代理客户端工作正常）。若 Clash / V2Ray 未运行，全机网络将无法连接。'
                 : '系统代理指向外部地址，一般无需本扩展干预。',
         };
     } catch (e: any) {
@@ -298,42 +362,30 @@ export async function collectDiagnostics(extensionRoot: string, config: ProxyCon
 
     const dylib = bundledBin(extensionRoot, 'libantigravity.dylib');
     const relay = bundledBin(extensionRoot, RELAY_EXECUTABLE);
+    const isWin = process.platform === 'win32';
+    
     items.push({
         key: 'bin_dylib',
         title: '内置 libantigravity.dylib',
-        ok: dylib.ok,
-        detail: dylib.ok ? dylib.path : `缺失: ${dylib.path}`,
-        hint: dylib.ok ? undefined : '请使用完整打包的 VSIX 或从源码编译后放入 extension/bin',
+        ok: isWin ? true : dylib.ok,
+        detail: isWin
+            ? 'Windows 平台使用内置 child_injection 机制，无需 macOS dylib 依赖'
+            : (dylib.ok ? dylib.path : `缺失: ${dylib.path}`),
+        hint: isWin ? undefined : (dylib.ok ? undefined : '请使用完整打包的 VSIX 或从源码编译后放入 extension/bin'),
     });
+    
     items.push({
         key: 'bin_relay',
         title: `内置 ${RELAY_EXECUTABLE}`,
-        ok: relay.ok,
-        detail: relay.ok ? relay.path : `缺失: ${relay.path}`,
-        hint: relay.ok ? undefined : '同上',
-    });
-
-    const helperFullyInstalled = isSudoHelperInstalled();
-    const helperBinOnly = isHelperBinaryOnlyInstalled();
-    const sudoHint = helperFullyInstalled
-        ? `已安装免密 sudo helper：${SUDO_HELPER_PATH}（准备/启动不应再反复要密码）`
-        : helperBinOnly
-            ? `⚠️ helper 脚本存在（${SUDO_HELPER_PATH}）但缺少 /etc/sudoers.d/antigravity-proxy 免密规则 — sudo 仍会要密码，停用/清理会静默失败。请重新执行「一次性安装免密 sudo」`
-            : `未安装免密 sudo helper：命令面板「一次性安装免密 sudo」，仅需密码一次，之后走 ${SUDO_HELPER_PATH}`;
-    items.push({
-        key: 'sudo_helper',
-        title: '免密 sudo（可选）',
-        ok: helperFullyInstalled,
-        detail: sudoHint,
-        hint: helperFullyInstalled
-            ? undefined
-            : helperBinOnly
-                ? '请重新执行「一次性安装免密 sudo」以写入 sudoers 免密规则'
-                : '诊断页顶部或本条下方的「立即安装」；或在命令面板搜索「一次性安装免密 sudo」',
+        ok: isWin ? true : relay.ok,
+        detail: isWin
+            ? 'Windows 平台使用内置 Node.js SNI 中继服务，无需外部二进制依赖'
+            : (relay.ok ? relay.path : `缺失: ${relay.path}`),
+        hint: isWin ? undefined : (relay.ok ? undefined : '同上'),
     });
 
     const prepareWhere =
-        '免密 sudo 只省略密码，不会自动写 hosts。请点「准备特权环境」或开启设置「自动准备 hosts/中继」（需已装免密 helper）。亦可①配置页②诊断页顶部③命令面板。';
+        '请点「重新启动」或开启设置「自动准备 hosts/中继」以写入 hosts。亦可①配置页②诊断页顶部③命令面板。';
 
     const hosts = readHostsStatus();
     items.push({
@@ -354,7 +406,7 @@ export async function collectDiagnostics(extensionRoot: string, config: ProxyCon
         detail: relayProc.detail,
         hint: relayProc.ok
             ? undefined
-            : `无 PID 文件表示中继尚未成功启动：先完成 hosts 并执行「准备特权环境」或「一键启动」；若已执行仍失败请查看 ${RELAY_LOG_PATH}`,
+            : `无 PID 文件表示中继尚未成功启动：先完成 hosts 并执行「重新启动」或「一键启动」；若已执行仍失败请查看 ${RELAY_LOG_PATH}`,
     });
 
     items.push({
@@ -362,7 +414,7 @@ export async function collectDiagnostics(extensionRoot: string, config: ProxyCon
         title: '特权 / 签名说明',
         ok: true,
         detail:
-            'hosts、监听 443、codesign 需要管理员密码。「准备特权环境」只写 hosts + 启动 relay；完整一键启动另需注入 Antigravity。',
+            'hosts、监听 443、codesign 需要管理员密码。「重新启动」只写 hosts + 启动/重启 relay；完整一键启动另需注入 Antigravity。',
         hint: prepareWhere + '。relay 起停不会自动出现在配置页，需自行检测或看日志。',
     });
 
@@ -403,7 +455,7 @@ export async function checkSystemProxyForWarning(): Promise<string | undefined> 
     }
 }
 
-/** hosts 或 SNI 中继未就绪时需要执行「准备特权环境」 */
+/** hosts 或 SNI 中继未就绪时需要执行「重新启动」 */
 export async function needsPrepareEnvironmentSetup(): Promise<boolean> {
     const hosts = readHostsStatus();
     if (!hosts.ok) {
@@ -430,7 +482,10 @@ export async function isProxyFullyHealthy(extensionRoot: string, config: ProxyCo
         }
         const dylib = bundledBin(extensionRoot, 'libantigravity.dylib');
         const relay = bundledBin(extensionRoot, RELAY_EXECUTABLE);
-        if (!dylib.ok || !relay.ok) {
+        const isWin = process.platform === 'win32';
+        const dylibOk = isWin ? true : dylib.ok;
+        const relayOk = isWin ? true : relay.ok;
+        if (!dylibOk || !relayOk) {
             return false;
         }
         const hosts = readHostsStatus();
@@ -442,7 +497,15 @@ export async function isProxyFullyHealthy(extensionRoot: string, config: ProxyCo
             return false;
         }
         try {
-            await execShort('pgrep -f "Antigravity.app/Contents/MacOS/Electron"');
+            if (process.platform === 'win32') {
+                const exeName = path.basename(config.antigravityAppPath) || 'Antigravity.exe';
+                const tasklist = await execShort(`tasklist /FI "IMAGENAME eq ${exeName}" /NH`);
+                if (!tasklist.toLowerCase().includes(exeName.toLowerCase())) {
+                    return false;
+                }
+            } else {
+                await execShort('pgrep -f "Antigravity.app/Contents/MacOS/Electron"');
+            }
         } catch {
             return false;
         }

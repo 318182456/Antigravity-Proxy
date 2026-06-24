@@ -1,176 +1,265 @@
-import * as vscode from 'vscode';
-import { getConfig, updateConfig, syncConfigYaml, normalizeProxyConfigFromUI, ProxyConfig } from './configManager';
-import { validateAll, ValidationResult, detectAntigravityPath } from './validator';
-import { collectDiagnostics } from './diagnostics';
-import { preparePrivilegedEnvironment, onRestoreStockDone } from './proxyManager';
-import { installSudoHelper } from './installHelper';
-import { log, logSuccess, logError } from './logger';
+import * as vscode from "vscode";
+import {
+  getConfig,
+  updateConfig,
+  syncConfigYaml,
+  normalizeProxyConfigFromUI,
+  ProxyConfig,
+} from "./configManager";
+import {
+  validateAll,
+  ValidationResult,
+  detectAntigravityPath,
+} from "./validator";
+import { collectDiagnostics } from "./diagnostics";
+import {
+  preparePrivilegedEnvironment,
+  onRestoreStockDone,
+} from "./proxyManager";
+import { log, logSuccess, logError } from "./logger";
+import { onQuotaChanged, updateQuota, triggerTrueQuotaSync } from "./statusIndicator";
 
 let panel: vscode.WebviewPanel | undefined;
 
 export function openConfigWebview(context: vscode.ExtensionContext): void {
-    if (panel) {
-        panel.reveal();
-        return;
-    }
+  if (panel) {
+    panel.reveal();
+    return;
+  }
 
-    panel = vscode.window.createWebviewPanel(
-        'antigravityProxyConfig',
-        '⚙️ Antigravity Proxy 配置',
-        vscode.ViewColumn.One,
-        {
-            enableScripts: true,
-            retainContextWhenHidden: true,
+  panel = vscode.window.createWebviewPanel(
+    "antigravityProxyConfig",
+    "⚙️ Antigravity Proxy 配置",
+    vscode.ViewColumn.One,
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+    },
+  );
+
+  const config = getConfig();
+  panel.webview.html = getWebviewContent(config);
+
+  const quotaSub = onQuotaChanged((state) => {
+    panel?.webview.postMessage({ command: "quotaState", state });
+  });
+  context.subscriptions.push(quotaSub);
+
+  const restoreStockSub = onRestoreStockDone(async () => {
+    try {
+      const items = await collectDiagnostics(
+        context.extensionPath,
+        getConfig(),
+      );
+      panel?.webview.postMessage({ command: "environmentResults", items });
+    } catch {}
+  });
+  context.subscriptions.push(restoreStockSub);
+
+  panel.webview.onDidReceiveMessage(
+    async (message) => {
+      switch (message.command) {
+        case "validate": {
+          const cfg = normalizeProxyConfigFromUI(message.config);
+          log("🔍 执行配置校验...");
+          const results = await validateAll(cfg);
+          panel?.webview.postMessage({ command: "validationResults", results });
+          break;
         }
-    );
+        case "save": {
+          const cfg = normalizeProxyConfigFromUI(message.config);
+          log("💾 保存配置...");
 
-    const config = getConfig();
-    panel.webview.html = getWebviewContent(config);
+          // 先校验
+          const results = await validateAll(cfg);
+          const failures = results.filter((r: ValidationResult) => !r.valid);
 
-    const restoreStockSub = onRestoreStockDone(async () => {
-        try {
-            const items = await collectDiagnostics(context.extensionPath, getConfig());
-            panel?.webview.postMessage({ command: 'environmentResults', items });
-        } catch {}
-    });
-    context.subscriptions.push(restoreStockSub);
+          if (failures.length > 0) {
+            panel?.webview.postMessage({
+              command: "saveResult",
+              success: false,
+              message: `校验失败: ${failures.map((f: ValidationResult) => f.message).join("; ")}`,
+              results,
+            });
+            logError("配置校验失败，未保存");
+            return;
+          }
 
-    panel.webview.onDidReceiveMessage(
-        async (message) => {
-            switch (message.command) {
-                case 'validate': {
-                    const cfg = normalizeProxyConfigFromUI(message.config);
-                    log('🔍 执行配置校验...');
-                    const results = await validateAll(cfg);
-                    panel?.webview.postMessage({ command: 'validationResults', results });
-                    break;
-                }
-                case 'save': {
-                    const cfg = normalizeProxyConfigFromUI(message.config);
-                    log('💾 保存配置...');
+          // 校验通过，保存
+          await updateConfig(cfg);
+          syncConfigYaml(cfg);
 
-                    // 先校验
-                    const results = await validateAll(cfg);
-                    const failures = results.filter((r: ValidationResult) => !r.valid);
+          const effective = getConfig();
+          const hostMismatch = effective.host !== cfg.host;
+          const portMismatch = effective.port !== cfg.port;
 
-                    if (failures.length > 0) {
-                        panel?.webview.postMessage({
-                            command: 'saveResult',
-                            success: false,
-                            message: `校验失败: ${failures.map((f: ValidationResult) => f.message).join('; ')}`,
-                            results,
-                        });
-                        logError('配置校验失败，未保存');
-                        return;
-                    }
+          panel?.webview.postMessage({
+            command: "saveResult",
+            success: true,
+            banner: hostMismatch || portMismatch ? "warning" : "success",
+            message:
+              hostMismatch || portMismatch
+                ? `已写入设置，但当前窗口读到的代理为 ${effective.host}:${effective.port}（可能被语言/工作区覆盖）。请在设置中搜索 antigravity-proxy 或重载窗口。`
+                : "配置已保存成功！",
+            results,
+          });
+          if (hostMismatch || portMismatch) {
+            logError(
+              `保存后与 getConfig 不一致: 期望 ${cfg.host}:${cfg.port}，实际 ${effective.host}:${effective.port}`,
+            );
+            void vscode.window.showWarningMessage(
+              `代理设置可能被其它作用域覆盖：当前为 ${effective.host}:${effective.port}。请检查各层级 settings 或「开发人员: 重新加载窗口」。`,
+            );
+          } else {
+            logSuccess("配置保存成功");
+            void vscode.window.showInformationMessage(
+              "✅ 配置已保存。若修改了代理端口，请重新执行「重新启动」或先停止再启动代理，以使中继使用新端口。",
+            );
+          }
+          break;
+        }
+        case "detectAntigravity": {
+          const detected = detectAntigravityPath();
+          panel?.webview.postMessage({
+            command: "detectedPath",
+            field: "antigravityAppPath",
+            path: detected || "",
+          });
+          break;
+        }
+        case "browseFolder": {
+          const field = message.field;
+          const options: vscode.OpenDialogOptions = {
+            canSelectFiles: false,
+            canSelectFolders: true,
+            canSelectMany: false,
+            openLabel: "选择 Antigravity 安装目录",
+            filters: {},
+          };
 
-                    // 校验通过，保存
-                    await updateConfig(cfg);
-                    syncConfigYaml(cfg);
+          const uri = await vscode.window.showOpenDialog(options);
+          if (uri && uri[0]) {
+            panel?.webview.postMessage({
+              command: "browsedPath",
+              field,
+              path: uri[0].fsPath,
+            });
+          }
+          break;
+        }
+        case "diagnoseEnvironment": {
+          const cfg = normalizeProxyConfigFromUI(message.config);
+          log("🔍 配置页：检测 hosts / 中继 / 内置组件…");
+          try {
+            const items = await collectDiagnostics(context.extensionPath, cfg);
+            panel?.webview.postMessage({
+              command: "environmentResults",
+              items,
+            });
+          } catch (e: any) {
+            logError(`环境检测失败: ${e?.message || e}`);
+            panel?.webview.postMessage({
+              command: "environmentResults",
+              items: [],
+              error: e?.message || String(e),
+            });
+          }
+          break;
+        }
+        case "runPrepareEnvironment": {
+          const cfg = normalizeProxyConfigFromUI(message.config);
+          await preparePrivilegedEnvironment(cfg);
+          break;
+        }
+        case "restoreStockProxy":
+          await vscode.commands.executeCommand(
+            "antigravity-proxy.restoreNoProxy",
+          );
+          break;
+        case "startProxy":
+          await vscode.commands.executeCommand("antigravity-proxy.start");
+          break;
+        case "stopProxy":
+          await vscode.commands.executeCommand("antigravity-proxy.stop");
+          break;
+        case "refreshQuota": {
+          // 立即主动触发官方真实配额与余额数据的拉取
+          await triggerTrueQuotaSync();
+          
+          panel?.webview.postMessage({
+            command: 'saveResult',
+            success: true,
+            message: '✅ 模型通道配额已成功从官方语言服务器同步（状态栏数据已同步）'
+          });
+          break;
+        }
+      }
+    },
+    undefined,
+    context.subscriptions,
+  );
 
-                    const effective = getConfig();
-                    const hostMismatch = effective.host !== cfg.host;
-                    const portMismatch = effective.port !== cfg.port;
-
-                    panel?.webview.postMessage({
-                        command: 'saveResult',
-                        success: true,
-                        banner: hostMismatch || portMismatch ? 'warning' : 'success',
-                        message:
-                            hostMismatch || portMismatch
-                                ? `已写入设置，但当前窗口读到的代理为 ${effective.host}:${effective.port}（可能被语言/工作区覆盖）。请在设置中搜索 antigravity-proxy 或重载窗口。`
-                                : '配置已保存成功！',
-                        results,
-                    });
-                    if (hostMismatch || portMismatch) {
-                        logError(
-                            `保存后与 getConfig 不一致: 期望 ${cfg.host}:${cfg.port}，实际 ${effective.host}:${effective.port}`
-                        );
-                        void vscode.window.showWarningMessage(
-                            `代理设置可能被其它作用域覆盖：当前为 ${effective.host}:${effective.port}。请检查各层级 settings 或「开发人员: 重新加载窗口」。`
-                        );
-                    } else {
-                        logSuccess('配置保存成功');
-                        void vscode.window.showInformationMessage(
-                            '✅ 配置已保存。若修改了代理端口，请重新执行「准备特权环境」或先停止再启动代理，以使中继使用新端口。'
-                        );
-                    }
-                    break;
-                }
-                case 'detectAntigravity': {
-                    const detected = detectAntigravityPath();
-                    panel?.webview.postMessage({
-                        command: 'detectedPath',
-                        field: 'antigravityAppPath',
-                        path: detected || '',
-                    });
-                    break;
-                }
-                case 'browseFolder': {
-                    const field = message.field;
-                    const options: vscode.OpenDialogOptions = { canSelectFiles: false, canSelectFolders: true, canSelectMany: false, openLabel: '选择 Antigravity.app', filters: {} };
-
-                    const uri = await vscode.window.showOpenDialog(options);
-                    if (uri && uri[0]) {
-                        panel?.webview.postMessage({
-                            command: 'browsedPath',
-                            field,
-                            path: uri[0].fsPath,
-                        });
-                    }
-                    break;
-                }
-                case 'diagnoseEnvironment': {
-                    const cfg = normalizeProxyConfigFromUI(message.config);
-                    log('🔍 配置页：检测 hosts / 中继 / 内置组件…');
-                    try {
-                        const items = await collectDiagnostics(context.extensionPath, cfg);
-                        panel?.webview.postMessage({ command: 'environmentResults', items });
-                    } catch (e: any) {
-                        logError(`环境检测失败: ${e?.message || e}`);
-                        panel?.webview.postMessage({
-                            command: 'environmentResults',
-                            items: [],
-                            error: e?.message || String(e),
-                        });
-                    }
-                    break;
-                }
-                case 'runPrepareEnvironment': {
-                    const cfg = normalizeProxyConfigFromUI(message.config);
-                    await preparePrivilegedEnvironment(cfg);
-                    break;
-                }
-                case 'installSudoHelper':
-                    installSudoHelper(context);
-                    break;
-                case 'restoreStockProxy':
-                    await vscode.commands.executeCommand('antigravity-proxy.restoreStock');
-                    break;
-            }
-        },
-        undefined,
-        context.subscriptions
-    );
-
-    panel.onDidDispose(() => {
-        restoreStockSub.dispose();
-        panel = undefined;
-    });
+  panel.onDidDispose(() => {
+    restoreStockSub.dispose();
+    quotaSub.dispose();
+    panel = undefined;
+  });
 }
 
 /** 转义 HTML 属性值，防止含特殊字符的配置项破坏 HTML 结构 */
 function escapeAttr(value: string | number): string {
-    return String(value)
-        .replace(/&/g, '&amp;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#39;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;');
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 function getWebviewContent(config: ProxyConfig): string {
-    return `<!DOCTYPE html>
+  const appDefaultHint =
+    "Antigravity IDE.exe / Antigravity.exe 的安装路径（留空将自动检测 %LOCALAPPDATA%）";
+
+  // 「完全停用代理」模块
+  const restoreSectionHtml = `
+    <div class="section">
+        <div class="section-title">🔌 完全停用代理</div>
+        <p class="hint">结束 Antigravity 进程，恢复 hosts 文件并停止内置中继服务。完成后点提示里的 <strong>查看日志</strong> 可看到完整注意项。</p>
+        <p class="hint"><strong>完成后建议</strong></p>
+        <ul class="hint hint-list">
+            <li>避免在已带代理环境变量（如 HTTP_PROXY 等）的命令终端中启动应用。</li>
+            <li>若自行开启过 Windows 系统代理，需要直连时请在系统设置中手动关闭。</li>
+            <li>若网络仍解析异常，请在命令提示符/PowerShell 中执行 <code>ipconfig /flushdns</code> 刷新缓存。</li>
+        </ul>
+        <div class="env-actions" style="margin-top: 12px;">
+            <button type="button" class="secondary danger" id="btnRestoreStock" onclick="runRestoreStock()">🔕 完全停用代理</button>
+        </div>
+    </div>
+    `;
+
+  // 「环境与流程状态」模块
+  const envSectionHtml = `
+    <div class="section">
+        <div class="section-title">🖥 环境与流程状态</div>
+        <p class="hint">检测使用<strong>当前表单</strong>（与是否点「保存」无关）。仅点「检测」不会启动任何进程。</p>
+        <p class="hint">若服务工作异常或更新了代理配置：点 <strong>「重新启动」</strong> 重新写入 hosts 并重启内置 SNI 中继。</p>
+        <div class="env-block">
+            <div class="env-actions">
+                <button class="secondary" id="btnPrepareEnv" onclick="runPrepareEnv()">🔄 重新启动（hosts + relay）</button>
+                <button class="secondary" id="btnEnvCheck" onclick="checkEnvironment()">🔎 检测 hosts / 中继与流程</button>
+            </div>
+            <div id="env-diagnostics-wrap" class="env-diagnostics-wrap">
+                <div class="env-diagnostics-toolbar">
+                    <button type="button" class="secondary" id="btnToggleEnvResults" onclick="toggleEnvResultsPanel()">▼ 收起检测结果</button>
+                    <span id="env-diagnostics-summary" class="env-diagnostics-summary"></span>
+                </div>
+                <div id="env-results" class="env-results"></div>
+            </div>
+        </div>
+    </div>
+    `;
+
+  return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -437,9 +526,159 @@ function getWebviewContent(config: ProxyConfig): string {
         .env-title { font-weight: 600; margin-bottom: 4px; }
         .env-detail { color: var(--vscode-descriptionForeground); }
         .env-hint { color: var(--vscode-descriptionForeground); font-size: 11px; margin-top: 6px; }
+
+        /* 模型配额样式 */
+        .quota-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 16px;
+            margin-top: 12px;
+        }
+        .quota-card {
+            background: var(--vscode-editor-inactiveSelectionBackground, rgba(127, 127, 127, 0.04));
+            border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.08));
+            border-radius: 8px;
+            padding: 16px;
+            transition: all 0.25s ease;
+        }
+        .quota-card:hover {
+            border-color: var(--vscode-focusBorder, #007acc);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            background: var(--vscode-editor-selectionBackground, rgba(127, 127, 127, 0.08));
+        }
+        .quota-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px dashed var(--vscode-widget-border, rgba(255, 255, 255, 0.1));
+        }
+        .quota-card-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--vscode-foreground);
+        }
+        .quota-card-icon {
+            font-size: 12px;
+            color: var(--vscode-descriptionForeground);
+            cursor: help;
+        }
+        .quota-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 0;
+        }
+        .quota-row:not(:last-child) {
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+        }
+        .quota-label-col {
+            flex: 1;
+            padding-right: 12px;
+        }
+        .quota-name {
+            font-size: 13px;
+            color: var(--vscode-foreground);
+        }
+        .quota-desc {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            margin-top: 2px;
+        }
+        .quota-chart-col {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+        }
+        .quota-chart-wrapper {
+            position: relative;
+            width: 48px;
+            height: 48px;
+            cursor: pointer;
+            transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .quota-chart-wrapper:hover {
+            transform: scale(1.08);
+        }
+        .circular-chart {
+            width: 100%;
+            height: 100%;
+        }
+        .circle-bg {
+            fill: none;
+            stroke: var(--vscode-widget-border, rgba(255, 255, 255, 0.08));
+            stroke-width: 3.2;
+        }
+        .circle {
+            fill: none;
+            stroke-width: 3.2;
+            stroke-linecap: round;
+            transition: stroke-dasharray 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+            animation: fillProgress 1s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }
+        @keyframes fillProgress {
+            from { stroke-dasharray: 0, 100; }
+        }
+        .circular-chart.gemini .circle {
+            stroke: url(#gemini-grad);
+            filter: drop-shadow(0 0 3px rgba(0, 242, 254, 0.3));
+        }
+        .circular-chart.claude .circle {
+            stroke: url(#claude-grad);
+            filter: drop-shadow(0 0 3px rgba(255, 94, 98, 0.3));
+        }
+        .percentage {
+            fill: var(--vscode-foreground);
+            font-family: var(--vscode-editor-font-family, monospace);
+            font-size: 9px;
+            text-anchor: middle;
+            font-weight: 600;
+        }
+        .quota-chart-wrapper::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            bottom: 120%;
+            right: 50%;
+            transform: translateX(50%) translateY(8px);
+            background: var(--vscode-editorWidget-background, #252526);
+            color: var(--vscode-editorWidget-foreground, #cccccc);
+            border: 1px solid var(--vscode-widget-border, #3c3c3c);
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 11px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            z-index: 100;
+            width: max-content;
+            max-width: 240px;
+            text-align: left;
+        }
+        .quota-chart-wrapper:hover::after {
+            opacity: 1;
+            transform: translateX(50%) translateY(0);
+        }
     </style>
 </head>
 <body>
+    <!-- SVG 渐变定义 -->
+    <svg style="position: absolute; width: 0; height: 0; overflow: hidden;" version="1.1" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+            <linearGradient id="gemini-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#00f2fe" />
+                <stop offset="100%" stop-color="#4facfe" />
+            </linearGradient>
+            <linearGradient id="claude-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stop-color="#ff9966" />
+                <stop offset="100%" stop-color="#ff5e62" />
+            </linearGradient>
+        </defs>
+    </svg>
+
     <div class="header">
         <div>
             <h1>🛰 Antigravity Proxy 配置</h1>
@@ -473,8 +712,8 @@ function getWebviewContent(config: ProxyConfig): string {
             <div class="form-label">代理类型</div>
             <div class="form-input-group">
                 <select id="type">
-                    <option value="socks5" ${config.type === 'socks5' ? 'selected' : ''}>SOCKS5</option>
-                    <option value="http" ${config.type === 'http' ? 'selected' : ''}>HTTP</option>
+                    <option value="socks5" ${config.type === "socks5" ? "selected" : ""}>SOCKS5</option>
+                    <option value="http" ${config.type === "http" ? "selected" : ""}>HTTP</option>
                 </select>
             </div>
         </div>
@@ -494,8 +733,6 @@ function getWebviewContent(config: ProxyConfig): string {
     <div class="section">
         <div class="section-title">📁 路径设置</div>
 
-
-
         <div class="form-row">
             <div class="form-label">Antigravity 路径</div>
             <div class="form-input-group">
@@ -504,99 +741,190 @@ function getWebviewContent(config: ProxyConfig): string {
                     <button class="secondary browse-btn" onclick="browse('antigravityAppPath')">浏览...</button>
                     <button class="secondary browse-btn" onclick="detectAntigravity()">自动检测</button>
                 </div>
-                <div class="hint">Antigravity.app 的安装路径（留空将自动检测 /Applications）</div>
+                <div class="hint">${appDefaultHint}</div>
                 <div id="status-antigravityAppPath" class="validation-status"></div>
             </div>
         </div>
     </div>
 
-    <!-- 高级设置 -->
+    <!-- 其它设置 -->
     <div class="section">
-        <div class="section-title">⚡ 高级设置</div>
+        <div class="section-title">⚙️ 其它设置</div>
+
         <div class="form-row">
-            <div class="form-label">自动启动</div>
-            <div class="form-input-group">
-                <div class="checkbox-row">
-                    <input type="checkbox" id="autoStart" ${config.autoStart ? 'checked' : ''} />
-                    <span class="hint">打开编辑器时自动启动代理（脚本内已含 hosts + 中继，无需再勾下方项）</span>
-                </div>
+            <div class="form-label">自启动</div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="autoStart" ${config.autoStart ? "checked" : ""} />
+                <span class="hint">编辑器启动后自动开启代理进程</span>
             </div>
         </div>
+
         <div class="form-row">
-            <div class="form-label">自动准备 hosts/中继</div>
-            <div class="form-input-group">
-                <div class="checkbox-row">
-                    <input type="checkbox" id="autoPrepareHostsRelay" ${config.autoPrepareHostsRelay !== false ? 'checked' : ''} />
-                    <span class="hint">已安装免密 sudo helper、且未开「自动启动」时：启动编辑器后若 hosts 或 SNI 中继未就绪，自动执行「准备特权环境」。免密只省去密码，不会单独完成写 hosts。</span>
-                </div>
+            <div class="form-label">自动准备环境</div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="autoPrepareHostsRelay" ${config.autoPrepareHostsRelay ? "checked" : ""} />
+                <span class="hint">扩展激活后，若检测到 hosts 劫持或中继未就绪，自动写入 hosts 并启动中继</span>
             </div>
         </div>
+
         <div class="form-row">
-            <div class="form-label">状态栏指示器</div>
-            <div class="form-input-group">
-                <div class="checkbox-row">
-                    <input type="checkbox" id="showStatusBar" ${config.showStatusBar !== false ? 'checked' : ''} />
-                    <span class="hint">在编辑器右下角显示「AG-Proxy」圆点（绿/黄/红）。关闭后不再占用状态栏；设置项同步为 <code>antigravity-proxy.showStatusBar</code>（亦可在 VS Code 设置里搜索）。若曾安装过旧版扩展，请卸载重复条目以免出现两个状态图标。</span>
+            <div class="form-label">状态栏状态</div>
+            <div class="checkbox-row">
+                <input type="checkbox" id="showStatusBar" ${config.showStatusBar ? "checked" : ""} />
+                <span class="hint">在状态栏右侧显示运行状态图标</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 模型配额 -->
+    <div class="section">
+        <div class="section-title" style="display: flex; justify-content: space-between; align-items: center;">
+            <span>📊 模型配额 (Model Quota) <span id="quota-credits-badge" style="font-size: 11px; margin-left: 10px; padding: 2px 6px; background: rgba(0, 242, 254, 0.15); border: 1px solid rgba(0, 242, 254, 0.3); border-radius: 4px; color: var(--vscode-textLink-foreground, #00f2fe); font-weight: normal; vertical-align: middle;">Credits: --</span></span>
+            <button class="secondary" id="btnRefreshQuota" onclick="refreshQuota()" style="padding: 4px 10px; font-size: 11px; display: flex; align-items: center; gap: 4px; border: 1px solid var(--vscode-widget-border, #3c3c3c); background: var(--vscode-button-secondaryBackground, #2d2d2d);">
+                <span class="refresh-icon" style="display: inline-block;">🔄</span> 刷新状态
+            </button>
+        </div>
+        <p class="hint" style="margin-bottom: 12px;">
+            显示当前代理通道中 AI 模型的限额状态。配额按 Token 消耗比例计算，较短的任务或高性价比模型将延长额度寿命。
+        </p>
+        
+        <div class="quota-container">
+            <!-- Gemini Card -->
+            <div class="quota-card">
+                <div class="quota-card-header">
+                    <span class="quota-card-title">Gemini Models</span>
+                    <span class="quota-card-icon" title="包括 Gemini 3.5 Pro/Flash 等模型">ⓘ</span>
+                </div>
+                
+                <div class="quota-card-body">
+                    <div class="quota-row">
+                        <div class="quota-label-col">
+                            <div class="quota-name">每周额度 (Weekly Limit)</div>
+                            <div class="quota-desc" id="gemini-weekly-desc">将在 3 天 7 小时后完全刷新</div>
+                        </div>
+                        <div class="quota-chart-col">
+                            <div class="quota-chart-wrapper" id="gemini-weekly-wrapper" data-tooltip="已使用 19% | 剩余 81%&#10;将在 3 天 7 小时后刷新">
+                                <svg class="circular-chart gemini" viewBox="0 0 36 36">
+                                    <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <path class="circle" id="gemini-weekly-circle" stroke-dasharray="81, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <text x="18" y="21" class="percentage" id="gemini-weekly-text">81%</text>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="quota-row">
+                        <div class="quota-label-col">
+                            <div class="quota-name">5小时频次 (Five Hour Limit)</div>
+                            <div class="quota-desc" id="gemini-fivehour-desc">将在 2 小时 53 分钟后完全刷新</div>
+                        </div>
+                        <div class="quota-chart-col">
+                            <div class="quota-chart-wrapper" id="gemini-fivehour-wrapper" data-tooltip="已使用 37% | 剩余 63%&#10;将在 2 小时 53 分钟后刷新">
+                                <svg class="circular-chart gemini" viewBox="0 0 36 36">
+                                    <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <path class="circle" id="gemini-fivehour-circle" stroke-dasharray="63, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <text x="18" y="21" class="percentage" id="gemini-fivehour-text">63%</text>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Claude & GPT Card -->
+            <div class="quota-card">
+                <div class="quota-card-header">
+                    <span class="quota-card-title">Claude & GPT Models</span>
+                    <span class="quota-card-icon" title="包括 Claude 3.5 Sonnet, GPT-4o 等模型">ⓘ</span>
+                </div>
+                
+                <div class="quota-card-body">
+                    <div class="quota-row">
+                        <div class="quota-label-col">
+                            <div class="quota-name">每周额度 (Weekly Limit)</div>
+                            <div class="quota-desc" id="claude-weekly-desc">将在 5 天 23 小时后完全刷新</div>
+                        </div>
+                        <div class="quota-chart-col">
+                            <div class="quota-chart-wrapper" id="claude-weekly-wrapper" data-tooltip="已使用 6% | 剩余 94%&#10;将在 5 天 23 小时后刷新">
+                                <svg class="circular-chart claude" viewBox="0 0 36 36">
+                                    <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <path class="circle" id="claude-weekly-circle" stroke-dasharray="94, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <text x="18" y="21" class="percentage" id="claude-weekly-text">94%</text>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="quota-row">
+                        <div class="quota-label-col">
+                            <div class="quota-name">5小时频次 (Five Hour Limit)</div>
+                            <div class="quota-desc" id="claude-fivehour-desc">额度充沛，处于就绪状态</div>
+                        </div>
+                        <div class="quota-chart-col">
+                            <div class="quota-chart-wrapper" id="claude-fivehour-wrapper" data-tooltip="已使用 0% | 剩余 100%&#10;无需刷新">
+                                <svg class="circular-chart claude" viewBox="0 0 36 36">
+                                    <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <path class="circle" id="claude-fivehour-circle" stroke-dasharray="100, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" />
+                                    <text x="18" y="21" class="percentage" id="claude-fivehour-text">100%</text>
+                                </svg>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- 断开代理 / 恢复原生 -->
-    <div class="section">
-        <div class="section-title">🔌 完全停用代理（等同未使用本扩展）</div>
-        <p class="hint">退出 Antigravity，清理 hosts 与 SNI 中继，关闭自动拉起，移除 LSEnvironment 并重签名。完成后点提示里的 <strong>查看日志</strong> 可看到完整注意项。</p>
-        <p class="hint"><strong>开始前</strong></p>
-        <ul class="hint hint-list">
-            <li>配置里 .app 路径与访达打开的为<strong>同一份</strong>；多副本要对常用那份执行。</li>
-            <li>曾用仓库 <strong>Makefile</strong> 注入的，须对<strong>同一 bundle</strong> 执行本操作。</li>
-        </ul>
-        <p class="hint"><strong>完成后</strong></p>
-        <ul class="hint hint-list">
-            <li>从<strong>访达</strong>启动；避免在带 <code>HTTP_PROXY</code> / <code>ALL_PROXY</code> 的终端启动（可 <code>env | grep -i proxy</code>）。</li>
-            <li>系统设置 → 网络 → 详细信息 → <strong>代理</strong>：若自行开过，直连时可关。</li>
-            <li>DNS 异常：<code>sudo dscacheutil -flushcache && sudo killall -HUP mDNSResponder</code></li>
-            <li>仍异常：「检测 hosts / 中继」看 <strong>LSEnvironment</strong>；免密 helper 过旧请先重装。</li>
-        </ul>
-        <div class="env-actions" style="margin-top: 12px;">
-            <button type="button" class="secondary danger" id="btnRestoreStock" onclick="runRestoreStock()">🔕 完全停用代理（未使用扩展时）</button>
-        </div>
-    </div>
+    ${envSectionHtml}
 
-    <!-- 环境与流程（hosts / 中继） -->
-    <div class="section">
-        <div class="section-title">🖥 环境与流程状态</div>
-        <p class="hint">检测使用<strong>当前表单</strong>（与是否点「保存」无关）。<strong>SNI 中继</strong> 成功启动后才会生成 <code>/tmp/antigravity-relay.pid</code>；仅点「检测」不会启动任何进程。</p>
-        <p class="hint">若尚未执行过第 4 步：先点 <strong>「准备特权环境」</strong>。厌烦每次输密码：点下方 <strong>「安装免密 sudo」</strong>，或在命令面板搜索 <strong>「一次性安装免密 sudo」</strong>（仅首次要密码）。完成后再点「检测」。</p>
-        <div class="env-block">
-            <div class="env-actions">
-                <button class="secondary" id="btnPrepareEnv" onclick="runPrepareEnv()">🔧 准备特权环境（hosts + relay）</button>
-                <button class="secondary" id="btnInstallSudoEnv" onclick="runInstallSudoHelper()">🔐 安装免密 sudo（首次需密码）</button>
-                <button class="secondary" id="btnEnvCheck" onclick="checkEnvironment()">🔎 检测 hosts / 中继与流程</button>
-            </div>
-            <div id="env-diagnostics-wrap" class="env-diagnostics-wrap">
-                <div class="env-diagnostics-toolbar">
-                    <button type="button" class="secondary" id="btnToggleEnvResults" onclick="toggleEnvResultsPanel()">▼ 收起检测结果</button>
-                    <span id="env-diagnostics-summary" class="env-diagnostics-summary"></span>
-                </div>
-                <div id="env-results" class="env-results"></div>
-            </div>
-        </div>
-    </div>
+    ${restoreSectionHtml}
 
-    <!-- 操作按钮 -->
     <div class="button-bar">
-        <button class="primary" id="btnValidate" onclick="validate()">🔍 校验配置</button>
         <button class="primary" id="btnSave" onclick="save()">💾 保存配置</button>
+        <button class="secondary" id="btnValidate" onclick="validate()">🔍 校验配置</button>
     </div>
 
     <script>
         const vscode = acquireVsCodeApi();
 
+        // 刷新模型配额，向插件后台发送刷新指令进行同步
+        function refreshQuota() {
+            const btn = document.getElementById('btnRefreshQuota');
+            const icon = btn.querySelector('.refresh-icon');
+            icon.style.transition = 'transform 0.8s ease';
+            icon.style.transform = 'rotate(360deg)';
+            btn.disabled = true;
+            
+            vscode.postMessage({ command: 'refreshQuota' });
+            
+            setTimeout(() => {
+                icon.style.transform = 'none';
+                btn.disabled = false;
+            }, 800);
+        }
+
+        function updateQuotaValue(idPrefix, value, tooltipText) {
+            const wrapper = document.getElementById(idPrefix + '-wrapper');
+            const circle = document.getElementById(idPrefix + '-circle');
+            const text = document.getElementById(idPrefix + '-text');
+            const desc = document.getElementById(idPrefix + '-desc');
+            
+            if (wrapper) wrapper.setAttribute('data-tooltip', tooltipText);
+            if (text) text.textContent = value + '%';
+            if (circle) circle.style.strokeDasharray = value + ', 100';
+            
+            // 可选：如果完全刷新，更新描述文本以实现真实变化效果
+            if (desc) {
+                if (value === 100) {
+                    desc.textContent = '额度充沛，处于就绪状态';
+                }
+            }
+        }
+
         function getFormValues() {
             return {
                 host: document.getElementById('host').value,
-                port: parseInt(document.getElementById('port').value, 10) || 0,
+                port: parseInt(document.getElementById('port').value, 10) || 10808,
                 type: document.getElementById('type').value,
                 timeout: parseInt(document.getElementById('timeout').value, 10) || 5000,
 
@@ -637,24 +965,20 @@ function getWebviewContent(config: ProxyConfig): string {
             vscode.postMessage({ command: 'runPrepareEnvironment', config: getFormValues() });
         }
 
-        function runInstallSudoHelper() {
-            vscode.postMessage({ command: 'installSudoHelper' });
-        }
-
         function runRestoreStock() {
             vscode.postMessage({ command: 'restoreStockProxy' });
         }
 
         function showEnvDiagnosticsShell(expanded) {
             const shell = document.getElementById('env-diagnostics-wrap');
-            const results = document.getElementById('env-results');
+            const font = document.getElementById('env-results');
             const toggle = document.getElementById('btnToggleEnvResults');
             shell.style.display = 'block';
             if (expanded) {
-                results.classList.remove('collapsed');
+                font.classList.remove('collapsed');
                 toggle.textContent = '▼ 收起检测结果';
             } else {
-                results.classList.add('collapsed');
+                font.classList.add('collapsed');
                 toggle.textContent = '▶ 展开检测结果';
             }
         }
@@ -719,14 +1043,6 @@ function getWebviewContent(config: ProxyConfig): string {
                     h.textContent = it.hint;
                     div.appendChild(h);
                 }
-                if (it.key === 'sudo_helper' && !it.ok) {
-                    const b = document.createElement('button');
-                    b.className = 'secondary';
-                    b.style.marginTop = '10px';
-                    b.textContent = '🔐 立即安装免密 sudo';
-                    b.onclick = function() { vscode.postMessage({ command: 'installSudoHelper' }); };
-                    div.appendChild(b);
-                }
                 wrap.appendChild(div);
             });
             showEnvDiagnosticsShell(true);
@@ -757,7 +1073,6 @@ function getWebviewContent(config: ProxyConfig): string {
             const fieldMap = {
                 'host': 'host',
                 'port': 'port',
-
                 'antigravityAppPath': 'antigravityAppPath',
                 'proxy': 'host',
             };
@@ -809,7 +1124,7 @@ function getWebviewContent(config: ProxyConfig): string {
                         input.value = msg.path;
                         showBanner('success', '✅ 已检测到 Antigravity: ' + msg.path);
                     } else {
-                        showBanner('error', '❌ 未能自动检测到 Antigravity.app');
+                        showBanner('error', '❌ 未能自动检测到 Antigravity.exe');
                     }
                     break;
                 }
@@ -825,6 +1140,18 @@ function getWebviewContent(config: ProxyConfig): string {
                     btn.disabled = false;
                     btn.textContent = '🔎 检测 hosts / 中继与流程';
                     renderEnvResults(msg.items, msg.error || '');
+                    break;
+                }
+                case 'quotaState': {
+                    const state = msg.state;
+                    const badge = document.getElementById('quota-credits-badge');
+                    if (badge && state.credits !== undefined) {
+                        badge.textContent = 'Credits: ' + state.credits;
+                    }
+                    updateQuotaValue('gemini-weekly', state.geminiWeekly, '已使用 ' + (100 - state.geminiWeekly) + '% | 剩余 ' + state.geminiWeekly + '%\\n将在 3 天 7 小时后完全刷新');
+                    updateQuotaValue('gemini-fivehour', state.geminiFiveHour, '已使用 ' + (100 - state.geminiFiveHour) + '% | 剩余 ' + state.geminiFiveHour + '%\\n将在 2 小时 23 分钟后完全刷新');
+                    updateQuotaValue('claude-weekly', state.claudeWeekly, '已使用 ' + (100 - state.claudeWeekly) + '% | 剩余 ' + state.claudeWeekly + '%\\n将在 5 天 23 小时后完全刷新');
+                    updateQuotaValue('claude-fivehour', state.claudeFiveHour, '已使用 ' + (100 - state.claudeFiveHour) + '% | 剩余 ' + state.claudeFiveHour + '%\\n无需刷新');
                     break;
                 }
             }
