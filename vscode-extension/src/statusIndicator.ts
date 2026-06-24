@@ -86,16 +86,28 @@ export function updateQuota(newQuota: Partial<QuotaState>): void {
             let geminiWeeklyResetTime = extContext.globalState.get<string>('geminiWeeklyResetTime');
             const prevWeekly = currentQuota.geminiWeekly;
             
+            // 进行一次性纠偏：由于之前的顺延漏洞导致多出了一小时，如果检测到尚未进行过此纠偏，将其调准（扣减 1 小时）
+            const geminiAdjusted = extContext.globalState.get<boolean>('geminiWeeklyAdjustedV2');
+            if (geminiWeeklyResetTime && !geminiAdjusted) {
+                const correctedTime = new Date(new Date(geminiWeeklyResetTime).getTime() - 60 * 60 * 1000).toISOString();
+                extContext.globalState.update('geminiWeeklyResetTime', correctedTime);
+                extContext.globalState.update('geminiWeeklyAdjustedV2', true);
+                geminiWeeklyResetTime = correctedTime;
+            }
+            
             if (!geminiWeeklyResetTime) {
-                // 初始化为 3 天 7 小时以匹配用户截图
-                const initReset = new Date(now + (3 * 24 + 7) * 60 * 60 * 1000).toISOString();
+                // 初始化为 3 天 6 小时以匹配官方最新校准值
+                const initReset = new Date(now + (3 * 24 + 6) * 60 * 60 * 1000).toISOString();
                 extContext.globalState.update('geminiWeeklyResetTime', initReset);
                 geminiWeeklyResetTime = initReset;
-            } else if (prevWeekly !== 100 && newQuota.geminiWeekly < prevWeekly) {
-                // 当额度减少且前一个值不是默认 100 时，重置为 7 天后
-                const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
-                extContext.globalState.update('geminiWeeklyResetTime', newReset);
-                geminiWeeklyResetTime = newReset;
+            } else {
+                // 完美的周期性固定重置逻辑：只有当前时间已经越过了上一次的重置时间（重置已发生），且额度在新周期内发生消耗，才重置到 7 天后
+                const hasExpired = now > new Date(geminiWeeklyResetTime).getTime();
+                if (hasExpired && prevWeekly !== 100 && newQuota.geminiWeekly < prevWeekly) {
+                    const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+                    extContext.globalState.update('geminiWeeklyResetTime', newReset);
+                    geminiWeeklyResetTime = newReset;
+                }
             }
             newQuota.geminiWeeklyResetTime = geminiWeeklyResetTime;
         }
@@ -105,16 +117,28 @@ export function updateQuota(newQuota: Partial<QuotaState>): void {
             let claudeWeeklyResetTime = extContext.globalState.get<string>('claudeWeeklyResetTime');
             const prevWeekly = currentQuota.claudeWeekly;
             
+            // 进行一次性纠偏：由于之前的顺延漏洞导致可能也有偏差，我们同样将其优化
+            const claudeAdjusted = extContext.globalState.get<boolean>('claudeWeeklyAdjustedV2');
+            if (claudeWeeklyResetTime && !claudeAdjusted) {
+                const correctedTime = new Date(new Date(claudeWeeklyResetTime).getTime() - 60 * 60 * 1000).toISOString();
+                extContext.globalState.update('claudeWeeklyResetTime', correctedTime);
+                extContext.globalState.update('claudeWeeklyAdjustedV2', true);
+                claudeWeeklyResetTime = correctedTime;
+            }
+            
             if (!claudeWeeklyResetTime) {
-                // 初始化为 5 天 23 小时以匹配用户截图
-                const initReset = new Date(now + (5 * 24 + 23) * 60 * 60 * 1000).toISOString();
+                // 初始化为 5 天 21 小时以匹配官方最新校准值
+                const initReset = new Date(now + (5 * 24 + 21) * 60 * 60 * 1000).toISOString();
                 extContext.globalState.update('claudeWeeklyResetTime', initReset);
                 claudeWeeklyResetTime = initReset;
-            } else if (prevWeekly !== 100 && newQuota.claudeWeekly < prevWeekly) {
-                // 当额度减少且前一个值不是默认 100 时，重置为 7 天后
-                const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
-                extContext.globalState.update('claudeWeeklyResetTime', newReset);
-                claudeWeeklyResetTime = newReset;
+            } else {
+                // 完美的周期性固定重置逻辑：只有当前时间已经越过了上一次的重置时间（重置已发生），且额度在新周期内发生消耗，才重置到 7 天后
+                const hasExpired = now > new Date(claudeWeeklyResetTime).getTime();
+                if (hasExpired && prevWeekly !== 100 && newQuota.claudeWeekly < prevWeekly) {
+                    const newReset = new Date(now + 7 * 24 * 60 * 60 * 1000).toISOString();
+                    extContext.globalState.update('claudeWeeklyResetTime', newReset);
+                    claudeWeeklyResetTime = newReset;
+                }
             }
             newQuota.claudeWeeklyResetTime = claudeWeeklyResetTime;
         }
