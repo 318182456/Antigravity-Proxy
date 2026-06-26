@@ -204,9 +204,9 @@ function httpConnect(
 }
 
 /**
- * 诊断 Windows 端口占用进程
+ * 诊断 Windows 端口占用进程 (精准区分绑定 IP 与通配监听)
  */
-function getWinPortOccupant(port: number): Promise<string | null> {
+function getWinPortOccupant(port: number, bindIp: string = '127.0.0.2'): Promise<string | null> {
     return new Promise((resolve) => {
         if (process.platform !== 'win32') {
             resolve(null);
@@ -220,13 +220,26 @@ function getWinPortOccupant(port: number): Promise<string | null> {
             
             const lines = stdout.split('\n');
             let pid: string | null = null;
-            const regex = new RegExp(`TCP\\s+\\S+:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i');
             
+            // 1. 优先寻找精准绑定 bindIp 的监听行
+            const exactRegex = new RegExp(`TCP\\s+${bindIp.replace(/\./g, '\\.')}:${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i');
             for (const line of lines) {
-                const match = line.match(regex);
+                const match = line.match(exactRegex);
                 if (match && match[1]) {
                     pid = match[1];
                     break;
+                }
+            }
+            
+            // 2. 若未找到，寻找通配监听 (0.0.0.0 或 [::])
+            if (!pid) {
+                const wildcardRegex = new RegExp(`TCP\\s+(?:0\\.0\\.0\\.0|\\[::\\]):${port}\\s+\\S+\\s+LISTENING\\s+(\\d+)`, 'i');
+                for (const line of lines) {
+                    const match = line.match(wildcardRegex);
+                    if (match && match[1]) {
+                        pid = match[1];
+                        break;
+                    }
                 }
             }
             
@@ -254,6 +267,34 @@ function getWinPortOccupant(port: number): Promise<string | null> {
 
 export class NodeRelayServer {
     private server: net.Server | null = null;
+
+    /**
+     * 检查端口是否被 VS Code 实例的中继服务占用
+     */
+    public async checkGlobalOccupant(port: number): Promise<{ isVscode: boolean; occupant: string | null }> {
+        if (process.platform !== 'win32') {
+            return { isVscode: false, occupant: null };
+        }
+        try {
+            const occupant = await getWinPortOccupant(port);
+            if (occupant) {
+                const name = occupant.toLowerCase();
+                const isVscode = (
+                    name.includes('node.exe') ||
+                    name.includes('code.exe') ||
+                    name.includes('cursor.exe') ||
+                    name.includes('electron.exe') ||
+                    name.includes('windsurf.exe') ||
+                    name.includes('cascade.exe') ||
+                    name.includes('agent') ||
+                    name.includes('mihomo-manager') ||
+                    name.includes('antigravity')
+                );
+                return { isVscode, occupant };
+            }
+        } catch {}
+        return { isVscode: false, occupant: null };
+    }
 
     /**
      * 启动 Node.js 透明代理中继
@@ -324,9 +365,14 @@ export class NodeRelayServer {
                 let extraMsg = '';
                 if ((err.code === 'EACCES' || err.code === 'EADDRINUSE') && process.platform === 'win32') {
                     try {
-                        const occupant = await getWinPortOccupant(port);
-                        if (occupant) {
-                            extraMsg = `。检测到端口 443 已被进程【${occupant}】占用，请先关闭该程序再重试。`;
+                        const check = await this.checkGlobalOccupant(port);
+                        if (check.isVscode) {
+                            logSuccess(`[中继] 检测到 127.0.0.2:${port} 已被另一个 VS Code 实例的中继服务占用 (${check.occupant})，将复用该中继，跳过本地启动`);
+                            resolve();
+                            return;
+                        }
+                        if (check.occupant) {
+                            extraMsg = `。检测到端口 443 已被进程【${check.occupant}】占用，请先关闭该程序再重试。`;
                         } else {
                             extraMsg = `。443 端口可能正被本地的 IIS 或者是 Docker 等网络服务独占，请先排查并空闲此端口。`;
                         }

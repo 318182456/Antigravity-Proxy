@@ -39,6 +39,10 @@ async function checkRelayProcess(): Promise<{ ok: boolean; detail: string }> {
         if (nodeRelayInstance.isRunning()) {
             return { ok: true, detail: `内置 Node.js SNI 中继运行中，监听在 127.0.0.2:443` };
         }
+        const check = await nodeRelayInstance.checkGlobalOccupant(443);
+        if (check.isVscode) {
+            return { ok: true, detail: `内置 Node.js SNI 中继运行中（由其他窗口的插件实例托管: ${check.occupant}）` };
+        }
         return { ok: false, detail: '内置 Node.js SNI 中继未启动，请点击「重新启动」或「启动代理」' };
     }
 
